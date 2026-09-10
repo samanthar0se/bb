@@ -474,9 +474,105 @@ describe("EnvironmentPickerUI multi-machine menu", () => {
     const checkoutItems = screen.getAllByRole("menuitem", {
       name: /Project checkout/u,
     });
+    expect(checkoutItems).toHaveLength(1);
     expect(checkoutItems[0]!.getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByText("Checkout missing on Mac Studio")).toBeNull();
+  });
+
+  it("keeps an unavailable provider visible on the machine it is selected on", () => {
+    render(
+      <EnvironmentPickerUI
+        value="provider:project-checkout"
+        sources={machineSources}
+        host={thisMachine}
+        isLocal
+        machines={{
+          hosts: [thisMachine, studio],
+          localDaemonHostId: thisMachine.id,
+          primaryHostId: thisMachine.id,
+        }}
+        providers={[checkoutProvider, branchProvider]}
+        providersByHostId={
+          new Map([
+            [thisMachine.id, [checkoutProvider, branchProvider]],
+            [
+              studio.id,
+              [
+                {
+                  ...checkoutProvider,
+                  availability: {
+                    status: "unavailable",
+                    message: "Checkout missing on Mac Studio",
+                  },
+                },
+                {
+                  ...branchProvider,
+                  availability: {
+                    status: "unavailable",
+                    message: "No reflink support on Mac Studio",
+                  },
+                },
+              ],
+            ],
+          ])
+        }
+        selectedProviderHostId={studio.id}
+        onSelectProvider={vi.fn()}
+        modal={false}
+      />,
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Environment" }), {
+      button: 0,
+    });
+
+    const checkoutItems = screen.getAllByRole("menuitem", {
+      name: /Project checkout/u,
+    });
+    expect(checkoutItems).toHaveLength(2);
     expect(checkoutItems[1]!.getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByText("Checkout missing on Mac Studio")).toBeTruthy();
+    expect(
+      screen.getAllByRole("menuitem", { name: /New branch workspace/u }),
+    ).toHaveLength(1);
+    expect(screen.queryByText("No reflink support on Mac Studio")).toBeNull();
+  });
+
+  it("lists every registered provider for a machine whose availability has not loaded", () => {
+    render(
+      <EnvironmentPickerUI
+        value="provider:project-checkout"
+        sources={machineSources}
+        host={thisMachine}
+        isLocal
+        machines={{
+          hosts: [thisMachine, studio],
+          localDaemonHostId: thisMachine.id,
+          primaryHostId: thisMachine.id,
+        }}
+        providers={[checkoutProvider, branchProvider]}
+        providersByHostId={
+          new Map([
+            [thisMachine.id, [checkoutProvider]],
+            [studio.id, undefined],
+          ])
+        }
+        selectedProviderHostId={thisMachine.id}
+        onSelectProvider={vi.fn()}
+        modal={false}
+      />,
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Environment" }), {
+      button: 0,
+    });
+
+    expect(
+      screen.getAllByRole("menuitem", { name: /Project checkout/u }),
+    ).toHaveLength(2);
+    const branchItems = screen.getAllByRole("menuitem", {
+      name: /New branch workspace/u,
+    });
+    expect(branchItems).toHaveLength(1);
+    expect(branchItems[0]!.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("disables an offline machine's options and shows when it was last seen", () => {

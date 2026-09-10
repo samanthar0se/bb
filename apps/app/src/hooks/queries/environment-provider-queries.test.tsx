@@ -6,7 +6,15 @@ import type { SystemEnvironmentProvider } from "@bb/server-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sdk } from "@/lib/sdk";
 import { createQueryClientTestHarness } from "@/test/queryClientTestHarness";
-import { useSystemEnvironmentProviders } from "./environment-provider-queries";
+import {
+  useSystemEnvironmentProviders,
+  useSystemEnvironmentProvidersByHost,
+} from "./environment-provider-queries";
+import {
+  environmentProviderListCacheKey,
+  readCachedEnvironmentProviderList,
+  writeCachedEnvironmentProviderList,
+} from "@/lib/environment-provider-list-cache";
 
 vi.mock("@/lib/sdk", () => ({
   sdk: { environments: { listProviders: vi.fn() } },
@@ -35,6 +43,7 @@ function pendingForever(): Promise<never> {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -61,6 +70,54 @@ describe("useSystemEnvironmentProviders", () => {
       projectId: "project-1",
       hostId: "host-1",
     });
+  });
+
+  it("remembers each machine's list and serves it before the server answers", async () => {
+    vi.mocked(sdk.environments.listProviders).mockResolvedValue([
+      WORKTREE_PROVIDER,
+    ]);
+    const harness = createQueryClientTestHarness();
+    const first = renderHook(
+      () => useSystemEnvironmentProvidersByHost("project-1", ["host-1"]),
+      { wrapper: harness.wrapper },
+    );
+    expect(first.result.current.get("host-1")).toBeUndefined();
+    await waitFor(() =>
+      expect(first.result.current.get("host-1")).toEqual([WORKTREE_PROVIDER]),
+    );
+    const cacheKey = environmentProviderListCacheKey({
+      projectId: "project-1",
+      hostId: "host-1",
+    });
+    expect(readCachedEnvironmentProviderList(cacheKey)).toEqual([
+      WORKTREE_PROVIDER,
+    ]);
+
+    vi.mocked(sdk.environments.listProviders).mockImplementation(
+      pendingForever,
+    );
+    const second = renderHook(
+      () => useSystemEnvironmentProvidersByHost("project-1", ["host-1"]),
+      { wrapper: createQueryClientTestHarness().wrapper },
+    );
+    expect(second.result.current.get("host-1")).toEqual([WORKTREE_PROVIDER]);
+  });
+
+  it("ignores a remembered list that no longer parses", () => {
+    vi.mocked(sdk.environments.listProviders).mockImplementation(
+      pendingForever,
+    );
+    const cacheKey = environmentProviderListCacheKey({
+      projectId: "project-1",
+      hostId: "host-1",
+    });
+    writeCachedEnvironmentProviderList(cacheKey, [WORKTREE_PROVIDER]);
+    window.localStorage.setItem(cacheKey, JSON.stringify([{ id: 1 }]));
+    const { result } = renderHook(
+      () => useSystemEnvironmentProvidersByHost("project-1", ["host-1"]),
+      { wrapper: createQueryClientTestHarness().wrapper },
+    );
+    expect(result.current.get("host-1")).toBeUndefined();
   });
 
   it("reports the list as unresolved when nothing was remembered", () => {

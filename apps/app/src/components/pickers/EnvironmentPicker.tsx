@@ -121,13 +121,27 @@ function scopedProviders(
   providers: readonly SystemEnvironmentProvider[],
   providersByHostId: EnvironmentPickerUIProps["providersByHostId"],
   hostId: string | null,
+  selection: { value: string; selectedProviderHostId: string | null },
 ): readonly SystemEnvironmentProvider[] {
-  if (hostId === null || providersByHostId === undefined) return providers;
+  const resolved = providersByHostId?.get(hostId ?? "");
+  const hostProviders =
+    hostId === null || resolved === undefined
+      ? providers
+      : mergeHostProviders(providers, resolved);
+  return hostProviders.filter(
+    (provider) =>
+      provider.availability?.status !== "unavailable" ||
+      (providerValueSelected(selection.value, provider) &&
+        selection.selectedProviderHostId === hostId),
+  );
+}
+
+function mergeHostProviders(
+  providers: readonly SystemEnvironmentProvider[],
+  resolved: readonly SystemEnvironmentProvider[],
+): readonly SystemEnvironmentProvider[] {
   const hostProviders = new Map(
-    (providersByHostId.get(hostId) ?? []).map((provider) => [
-      provider.id,
-      provider,
-    ]),
+    resolved.map((provider) => [provider.id, provider]),
   );
   return providers.flatMap((provider) => {
     const hostProvider = hostProviders.get(provider.id);
@@ -320,6 +334,7 @@ export function EnvironmentPickerUI({
               environmentProviders,
               providersByHostId,
               hostId,
+              { value, selectedProviderHostId },
             )}
             selectedProviderHostId={selectedProviderHostId}
             inputsControlProviderIds={inputsControlProviderIds}
@@ -449,6 +464,7 @@ function MachineGroupedEnvironmentOptions({
             machineProviders,
             providersByHostId,
             machineHost.id,
+            { value, selectedProviderHostId },
           )}
           selectedProviderHostId={selectedProviderHostId}
           inputsControlProviderIds={inputsControlProviderIds}
