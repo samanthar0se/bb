@@ -1172,7 +1172,10 @@ describe("thread runtime config", () => {
         status: "idle",
         value: { nested: { count: 1 }, marker: "original" },
       });
-      installAgentConfigurationResolver(() => {});
+      let resolverContext: AgentConfigurationArgs["context"] | undefined;
+      installAgentConfigurationResolver(({ context }) => {
+        resolverContext = context;
+      });
       try {
         await resolveThreadRuntimeCommandConfig(harness.deps, {
           thread,
@@ -1184,13 +1187,17 @@ describe("thread runtime config", () => {
             status: environment.status,
           },
         });
+        expect(resolverContext).toBeDefined();
+        expect(resolverContext).not.toHaveProperty("pluginMetadata");
+        expect(resolverContext?.thread.id).toBe(thread.id);
+        expect(resolverContext?.project.id).toBe(thread.projectId);
       } finally {
         setPluginAgentContributions(undefined);
       }
     });
   });
 
-  it("configures before first runtime command without serializing plugin metadata", async () => {
+  it("does not serialize plugin metadata into runtime commands", async () => {
     await withTestHarness(async (harness) => {
       const marker = "plugin-metadata-command-privacy-marker";
       const { environment, project, thread } = seedPluginMetadataThread(

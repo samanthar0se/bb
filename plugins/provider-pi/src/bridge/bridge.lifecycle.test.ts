@@ -471,16 +471,62 @@ it("resume_legacy_pi_session", async () => {
   await expectEveryChildGone(1);
 }, 90_000);
 
+it("accepts a prompt containing only a local file", async () => {
+  const threadId = "thr_file_only";
+  const started = await harness.startThread(threadId);
+  const providerThreadId = resultProviderThreadId(started.result);
+  const filePath = join(harness.workspaceDir, "notes.md");
+  writeFileSync(filePath, Buffer.from("notes\n"));
+
+  const response = await harness.request(2, "turn/start", {
+    threadId,
+    providerThreadId,
+    clientRequestId: "creq_234567abcd",
+    input: [
+      {
+        type: "localFile",
+        path: filePath,
+        name: "notes.md",
+        sizeBytes: 6,
+        mimeType: "text/markdown",
+      },
+    ],
+    options: FULL_PERMISSION_OPTIONS,
+  });
+
+  expect(response.result).toEqual({ threadId });
+  await harness.waitForTurnBoundary(threadId);
+  expect(
+    harness
+      .deltasOf(threadId)
+      .some(
+        (delta) =>
+          delta.kind === "item.textDelta" &&
+          String(delta.text).includes(`[Attached file: ${filePath}]`),
+      ),
+  ).toBe(true);
+  const stop = await harness.request((nextId += 1), "thread/stop", {
+    threadId,
+    providerThreadId,
+    intent: "release",
+    activeTurnId: null,
+  });
+  expect(stop.result).toMatchObject({
+    ok: true,
+    providerCheckpointId: "leaf-1",
+  });
+  await expectEveryChildGone(1);
+});
+
 it("accepts a prompt containing only a local image", async () => {
   const threadId = "thr_image_only";
-  const imageStarted = await harness.startThread(threadId);
-  const imageProviderThreadId = resultProviderThreadId(imageStarted.result);
+  await harness.startThread(threadId);
   const imagePath = join(harness.workspaceDir, "screenshot.png");
   writeFileSync(imagePath, Buffer.from("fake png data"));
 
   const response = await harness.request(2, "turn/start", {
     threadId,
-    providerThreadId: imageProviderThreadId,
+    providerThreadId: threadId,
     clientRequestId: "creq_234567abcd",
     input: [{ type: "localImage", path: imagePath, mimeType: "image/png" }],
     options: FULL_PERMISSION_OPTIONS,
