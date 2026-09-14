@@ -47,10 +47,12 @@ it(
       instructionMode: "append",
       options: OPTIONS,
     });
-    expect(start.result).toMatchObject({ providerThreadId: threadId });
+    const providerThreadId = String((start.result as { providerThreadId?: unknown }).providerThreadId);
+    expect(providerThreadId).toMatch(/^pi_/u);
+    expect(start.result).toMatchObject({ providerThreadId });
     await harness.request(2, "turn/start", {
       threadId,
-      providerThreadId: threadId,
+      providerThreadId,
       clientRequestId: "creq_ab23456789",
       input: [{ type: "text", text: "hello", mentions: [] }],
       options: OPTIONS,
@@ -58,7 +60,7 @@ it(
     let seen = await harness.waitForTurnBoundary(threadId, 0);
     await harness.request(3, "turn/start", {
       threadId,
-      providerThreadId: threadId,
+      providerThreadId,
       clientRequestId: "creq_cd23456789",
       input: [{ type: "text", text: "again", mentions: [] }],
       options: {
@@ -70,22 +72,22 @@ it(
     seen = await harness.waitForTurnBoundary(threadId, seen);
     await harness.request(4, "thread/stop", {
       threadId,
-      providerThreadId: threadId,
+      providerThreadId,
       intent: "release",
       activeTurnId: null,
     });
     const resume = await harness.request(5, "thread/resume", {
       threadId,
-      providerThreadId: threadId,
+      providerThreadId,
       cwd: harness.workspaceDir,
       instructionMode: "append",
       options: { ...OPTIONS, model: "fake-provider/fake-model" },
     });
-    expect(resume.result).toMatchObject({ providerThreadId: threadId });
+    expect(resume.result).toMatchObject({ providerThreadId });
     const fork = await harness.request(6, "thread/fork", {
       threadId: "thr_settings_fork",
       cwd: harness.workspaceDir,
-      sourceProviderThreadId: threadId,
+      sourceProviderThreadId: providerThreadId,
       options: OPTIONS,
       instructionMode: "append",
     });

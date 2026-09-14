@@ -8,6 +8,21 @@ import {
 
 let harness: FakePiBridgeHarness;
 
+function providerThreadIdFor(threadId: string): string {
+  const identity = [...harness.messages]
+    .reverse()
+    .find(
+      (message) =>
+        message.method === "thread/identity" &&
+        (message.params as { threadId?: unknown }).threadId === threadId,
+    );
+  const providerThreadId = (identity?.params as { providerThreadId?: unknown })
+    .providerThreadId;
+  expect(typeof providerThreadId).toBe("string");
+  if (typeof providerThreadId !== "string") throw new Error("missing provider thread identity");
+  return providerThreadId;
+}
+
 beforeEach(async () => {
   harness = await startFakePiBridge({
     prefix: "bb-pi-local-file-",
@@ -35,9 +50,10 @@ it("includes local file paths in turn prompts", async () => {
   const marker = `[Attached file: ${path}]`;
   await harness.startThread(threadId);
 
+  const providerThreadId = providerThreadIdFor(threadId);
   const response = await harness.request(1, "turn/start", {
     threadId,
-    providerThreadId: threadId,
+    providerThreadId,
     clientRequestId: "creq_ab23456789",
     input: [
       { type: "text", text: "Read this file.", mentions: [] },
@@ -65,7 +81,7 @@ it("accepts a turn prompt that contains only a local file", async () => {
 
   const response = await harness.request(2, "turn/start", {
     threadId,
-    providerThreadId: threadId,
+    providerThreadId: providerThreadIdFor(threadId),
     clientRequestId: "creq_cd23456789",
     input: [localFile(path)],
     options: FULL_PERMISSION_OPTIONS,
@@ -80,9 +96,10 @@ it("includes local file paths in steer prompts", async () => {
   const path = join(harness.workspaceDir, "notes.md");
   const marker = `[Attached file: ${path}]`;
   await harness.startThread(threadId);
+  const providerThreadId = providerThreadIdFor(threadId);
   await harness.request(3, "turn/start", {
     threadId,
-    providerThreadId: threadId,
+    providerThreadId,
     clientRequestId: "creq_ef23456789",
     input: [{ type: "text", text: "/hold", mentions: [] }],
     options: FULL_PERMISSION_OPTIONS,
@@ -91,7 +108,7 @@ it("includes local file paths in steer prompts", async () => {
 
   const response = await harness.request(4, "turn/steer", {
     threadId,
-    providerThreadId: threadId,
+    providerThreadId,
     expectedTurnId: "turn-1",
     clientRequestId: "creq_gh23456789",
     input: [localFile(path)],
