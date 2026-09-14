@@ -1,7 +1,11 @@
 import {
-  cancelProviderLaunch,
+  cancelProviderEnvironmentCreation,
   sweepProviderEnvironment,
-} from "../environments/provider-orchestration.js";
+} from "../environments/environment-engine.js";
+import {
+  removeCreatingMachine,
+  sweepProviderMachine,
+} from "../machines/provider-orchestration.js";
 import {
   listLiveThreadsInEnvironment,
   listNonDeletedChildThreads,
@@ -25,7 +29,7 @@ import {
 } from "./thread-lifecycle.js";
 import { archiveThreadAndReleaseChildren } from "./thread-ownership.js";
 import { requireThreadHostCommandEnvironment } from "./thread-command-environment.js";
-import { getActiveThreadProvisionContext } from "./thread-provisioning-active-context.js";
+import { getThreadProvisionContext } from "./thread-startup-store.js";
 import { isPreStartThreadStatus } from "./thread-status.js";
 
 interface ArchiveThreadEnvironment {
@@ -63,7 +67,7 @@ export function resolveArchiveThreadEnvironment(
   if (
     isPreStartThreadStatus(args.thread.status) ||
     args.thread.status === "stopping" ||
-    getActiveThreadProvisionContext(args.thread.id) !== null
+    getThreadProvisionContext(deps.db, args.thread.id) !== null
   ) {
     throwThreadEnvironmentUnavailable(
       threadEnvironmentUnavailableDetails("never_attached", null),
@@ -101,34 +105,24 @@ function archiveThreadWithLifecycleEffects(
     mode: "archived",
     threadId: archivedThread.id,
   });
-  void cancelProviderLaunch(deps, archivedThread.id).catch((error) =>
-    deps.logger.warn({ error }, "Environment launch cancellation failed"),
+  void cancelProviderEnvironmentCreation(deps, archivedThread.id).catch(
+    (error) =>
+      deps.logger.warn({ error }, "Environment launch cancellation failed"),
+  );
+  void removeCreatingMachine(deps, archivedThread.id).catch((error) =>
+    deps.logger.warn({ error }, "Machine launch cancellation failed"),
   );
   if (archivedThread.environmentId !== null)
     void sweepProviderEnvironment(deps, archivedThread.environmentId).catch(
       (error) => deps.logger.warn({ error }, "Environment retirement failed"),
     );
+  if (args.environment !== null) {
+    void sweepProviderMachine(deps, args.environment.hostId).catch((error) =>
+      deps.logger.warn({ error }, "Machine retirement failed"),
+    );
+  }
   emitPluginThreadArchived(archivedThread);
 
-  return archivedThread;
-}
-
-export function archiveThreadAndHiddenSourceForks(
-  deps: AppDeps,
-  args: ArchiveThreadWithLifecycleEffectsArgs,
-): Thread | null {
-  const archivedThread = archiveThreadWithLifecycleEffects(deps, args);
-  if (!archivedThread) {
-    return null;
-  }
-  for (const fork of listUnarchivedHiddenSourceThreads(deps.db, {
-    sourceThreadId: archivedThread.id,
-  })) {
-    archiveThreadWithLifecycleEffects(deps, {
-      environment: resolveArchiveThreadEnvironment(deps, { thread: fork }),
-      thread: fork,
-    });
-  }
   return archivedThread;
 }
 

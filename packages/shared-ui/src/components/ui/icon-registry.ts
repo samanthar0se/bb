@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import type { IconSvgElement } from "@hugeicons/react";
 
 export const EXTENDED_ICON_NAMES = [
@@ -74,6 +75,7 @@ export const EXTENDED_ICON_NAMES = [
   "Maximize2",
   "Mic",
   "Minimize2",
+  "MoveTo",
   "NewTab",
   "PackageReceive",
   "Palette",
@@ -84,6 +86,7 @@ export const EXTENDED_ICON_NAMES = [
   "Pin",
   "PinOff",
   "Play",
+  "Plug02",
   "Plus",
   "Puzzle",
   "Repeat",
@@ -127,5 +130,31 @@ export function subscribeExtendedIcons(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+  };
+}
+
+interface AppIconDefinition {
+  component: ComponentType<{ className?: string }>;
+  key: string;
+}
+
+let appIcons: ReadonlyMap<string, AppIconDefinition> = new Map();
+const appIconListeners = new Set<() => void>();
+
+export function setAppIcons(
+  next: ReadonlyMap<string, AppIconDefinition>,
+): void {
+  appIcons = next;
+  for (const listener of appIconListeners) listener();
+}
+
+export function getAppIcon(name: string): AppIconDefinition | undefined {
+  return appIcons.get(name);
+}
+
+export function subscribeAppIcons(listener: () => void): () => void {
+  appIconListeners.add(listener);
+  return () => {
+    appIconListeners.delete(listener);
   };
 }

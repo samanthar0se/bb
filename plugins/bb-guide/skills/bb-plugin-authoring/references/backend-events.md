@@ -3,6 +3,8 @@
 ### bb.events.on — lifecycle events
 
 ```ts
+bb.events.on("experimental_thread.events", ({ thread, sequence }) => { ... });
+bb.events.on("experimental_terminal.input", ({ terminal }) => { ... });
 bb.events.on("thread.created", ({ thread }) => { ... });
 bb.events.on("thread.active", ({ thread }) => { ... });
 bb.events.on("thread.idle", ({ thread, lastAssistantText }) => { ... });   // lastAssistantText: string | null
@@ -22,7 +24,7 @@ handler is told, and whatever it returns is IGNORED. The surface that ASKS is
 `bb.experimental_hooks`, below, where core acts on your answer — the same split
 git draws between post-commit and pre-commit hooks.
 
-Twelve events. The seven `thread.*` ones are thread lifecycle. `interaction.pending`
+Fourteen events. The seven `thread.*` ones are thread lifecycle. `interaction.pending`
 fires after core commits a pending interaction row. The three `message.*`
 ones fire when a dispatch is queued behind a wait, when a queued row's waits
 all clear and it dispatches, or when the queued row is cancelled. Every listener sees every queued row, so a plugin
@@ -98,6 +100,17 @@ always in the timeline yet. To react to a thread's content, listen on
 in a handler — including `bb.sdk.threads.update({ threadId, title })` —
 cannot delay or interrupt the thread's turn.
 
+`experimental_thread.events` notifies that the thread event sequence advanced. Core
+coalesces appends per thread into one notification per second, with the latest sequence
+and current thread DTO. Continuous output produces periodic updates and a final pending
+update. Reading history does not notify. The payload contains no event contents; use the
+existing thread-events SDK if your policy needs them. Modal v1 simply checks whether
+the delivered thread is active before extending its idle deadline.
+
+`experimental_terminal.input` fires after nonempty real user input is forwarded to a
+terminal. Its public terminal DTO includes hostId; keystrokes are not included. Output,
+keepalives and opening a terminal do not count.
+
 ### bb.experimental_hooks — the dispatch checkpoint
 
 **Hooks are questions core asks.** Core stops, hands your handler a context, and
@@ -170,12 +183,13 @@ Register resource operations with `bb.experimental_environments.register`.
 `icon` accepts host glyphs, plugin-relative assets, and this plugin's declared
 namespaced icons, just like agent providers. The provider listing includes a
 hashed `logoUrl` for assets. `app.slots.experimental_providerIcon` can override
-an environment provider's icon by its provider ID.
+an environment provider's icon with `providerKind: "environment"` and its `providerId`.
 
 ```ts
 bb.experimental_environments.register({
   id: "personal-workspace",
   displayName: "Personal workspace",
+  description: "Create a personal directory without a project.",
   icon: "Folder",
   requires: { projectless: true },
   async create({ host, pathKey, report, signal }) {
@@ -209,10 +223,11 @@ and are readable by every plugin through the SDK, including after the
 environment is destroyed. They are configuration, not a credential store;
 keep credentials in secret settings. `availability` may return
 available, setup-required with a message, or unavailable with a message for a
-project and machine. Core calls it inside the decision timeout and caches the
-answer until settings change or the provider calls `recheck`. `validate` may accept or refuse a request
-before a thread exists, using the resolved project, host, checkout, remote and
-inputs. Required facts and schema outputs are inferred by registration.
+project and machine. Core calls it inside the decision timeout only for the
+selected provider and machine during thread creation, checking it afresh for
+every creation request. `validate` may accept or refuse the same request before
+a thread exists, using the resolved project, host, checkout, remote and inputs.
+Required facts and schema outputs are inferred by registration.
 
 Core owns launch attempts, cancellation, retry timing, attachment, retirement,
 and removal in SQLite. Providers must not keep duplicate launch records or
@@ -225,7 +240,7 @@ attempt, pathKey, rebuild, `previous: { environment, resource } | null`,
 report, and an abort signal. It is one long call and must be idempotent for
 pathKey: after a process or plugin restart, core calls it again with the same
 attempt and pathKey. Return `created` with `path`, explicit `ownsPath`
-and optional `mergeBaseBranch`, or `failed` with terminal/transient and message.
+and optional `mergeBaseBranch`, or `failed` with a message; a failed create is terminal.
 `report.step` and
 `report.log` stream durable progress while the call runs.
 
@@ -240,7 +255,7 @@ failed(message).
 
 Policy exposes retireGraceMs (five minutes by default; null means never) and
 pathKeys (per-thread by default, or per-attempt). Core retries failed removal
-after 60 seconds and permits three transient creation retries, 30 seconds apart.
+after 60 seconds. Creation retries are explicit and start a new attempt on the same environment row after cleanup.
 Core imposes no overall provider-create timeout. These are internal core
 behaviors, not provider settings. Rebuilds use
 fresh path keys. Retirement starts after the last live thread archives or is deleted.
@@ -422,6 +437,6 @@ claiming and before mutating a shared checkout. Core normalizes trailing slashes
 on claims. Reuse, directory switching and restored dispatch enforce claims;
 only the owning launch is exempt. `bb.sdk.environments.list({ hostId, path })`
 compares stored paths in the database and does not contact hosts.
-Scoped discovery omits providers whose requirements are unmet; availability rows
-are only returned for eligible providers. Without a machine scope, discovery
-includes providers eligible on any persistent machine.
+Scoped discovery omits providers whose declared requirements are unmet without
+running Git inspection or plugin availability. Without a machine scope,
+discovery includes providers structurally eligible on any persistent machine.

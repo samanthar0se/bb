@@ -5,6 +5,7 @@ import {
   environmentSchema,
   hostSchema,
   jsonValueSchema,
+  pluginIdSchema,
   pluginMetadataSchema,
   pendingInteractionResolutionSchema,
   pendingInteractionSchema,
@@ -147,6 +148,18 @@ export const createThreadRequestSchema = z
         path: ["pluginMetadata"],
       });
     }
+    if (
+      value.pluginMetadata !== undefined &&
+      value.originPluginId !== undefined &&
+      !pluginIdSchema.safeParse(value.originPluginId).success
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "pluginMetadata requires originPluginId to be a valid plugin id",
+        path: ["originPluginId"],
+      });
+    }
     if (value.originKind === null && value.input.length === 0) {
       ctx.addIssue({
         code: "custom",
@@ -203,6 +216,18 @@ export const forkThreadRequestSchema = z
         code: "custom",
         message: 'pluginMetadata requires origin "plugin"',
         path: ["pluginMetadata"],
+      });
+    }
+    if (
+      value.pluginMetadata !== undefined &&
+      value.originPluginId !== undefined &&
+      !pluginIdSchema.safeParse(value.originPluginId).success
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "pluginMetadata requires originPluginId to be a valid plugin id",
+        path: ["originPluginId"],
       });
     }
   });
@@ -423,9 +448,6 @@ export const threadSearchHighlightRangeSchema = z
   .refine((range) => range.end > range.start, {
     message: "highlight range end must be greater than start",
   });
-export type ThreadSearchHighlightRange = z.infer<
-  typeof threadSearchHighlightRangeSchema
->;
 
 export const threadSearchMatchSchema = z
   .object({
@@ -443,7 +465,6 @@ export const threadSearchResultSchema = z
     matches: z.array(threadSearchMatchSchema),
   })
   .strict();
-export type ThreadSearchResult = z.infer<typeof threadSearchResultSchema>;
 
 export const threadSearchResultGroupSchema = z
   .object({
@@ -451,9 +472,6 @@ export const threadSearchResultGroupSchema = z
     results: z.array(threadSearchResultSchema),
   })
   .strict();
-export type ThreadSearchResultGroup = z.infer<
-  typeof threadSearchResultGroupSchema
->;
 
 export const threadSearchResponseSchema = z
   .object({
@@ -494,41 +512,34 @@ export const threadGetQuerySchema = z.object({
 });
 export type ThreadGetQuery = z.infer<typeof threadGetQuerySchema>;
 
-export const threadPluginMetadataResponseSchema = pluginMetadataSchema;
-export type ThreadPluginMetadataResponse = z.infer<
-  typeof threadPluginMetadataResponseSchema
->;
+export type ThreadPluginMetadataResponse = z.infer<typeof pluginMetadataSchema>;
 export const threadPluginMetadataQuerySchema = z
-  .object({ pluginId: z.string().min(1) })
+  .object({ pluginId: pluginIdSchema })
   .strict();
 export type ThreadPluginMetadataQuery = z.infer<
   typeof threadPluginMetadataQuerySchema
 >;
 export const updateThreadPluginMetadataRequestSchema = z
   .object({
-    pluginId: z.string().min(1),
-    set: z.record(z.string(), jsonValueSchema).optional(),
+    pluginId: pluginIdSchema,
+    set: pluginMetadataSchema.optional(),
     remove: z.array(z.string()).optional(),
   })
   .strict()
-  .superRefine((value, ctx) => {
-    if (value.remove && new Set(value.remove).size !== value.remove.length) {
+  .superRefine(({ set, remove }, ctx) => {
+    if (remove && new Set(remove).size !== remove.length) {
       ctx.addIssue({
         code: "custom",
         message: "remove contains duplicate keys",
         path: ["remove"],
       });
     }
-    if (value.set && value.remove) {
-      const overlap = value.remove.filter((key) =>
-        Object.hasOwn(value.set!, key),
-      );
-      if (overlap.length)
-        ctx.addIssue({
-          code: "custom",
-          message: "set and remove overlap",
-          path: ["remove"],
-        });
+    if (set && remove?.some((key) => Object.hasOwn(set, key))) {
+      ctx.addIssue({
+        code: "custom",
+        message: "set and remove overlap",
+        path: ["remove"],
+      });
     }
   });
 export type UpdateThreadPluginMetadataRequest = z.infer<
@@ -837,7 +848,6 @@ export const threadRunningEntrySchema = z.object({
   /** The machine it runs on; null while no environment has been chosen. */
   hostId: z.string().nullable(),
 });
-export type ThreadRunningEntry = z.infer<typeof threadRunningEntrySchema>;
 
 export const threadRunningResponseSchema = z.array(threadRunningEntrySchema);
 export type ThreadRunningResponse = z.infer<typeof threadRunningResponseSchema>;
@@ -865,6 +875,15 @@ export const timelinePageMetadataSchema = z
     returnedSegmentCount: z.number().int().nonnegative(),
     hasOlderRows: z.boolean(),
     olderCursor: timelinePaginationCursorSchema.nullable(),
+    historySnapshot: z.string().optional(),
+    contentPage: z
+      .object({
+        anchorSeq: z.number().int().positive(),
+        start: z.number().int().nonnegative(),
+        end: z.number().int().nonnegative(),
+        total: z.number().int().nonnegative(),
+      })
+      .optional(),
   })
   .strict();
 
@@ -895,6 +914,7 @@ export const threadTimelineQuerySchema = z
 export type ThreadTimelineQuery = z.infer<typeof threadTimelineQuerySchema>;
 
 export const timelineTurnSummaryDetailsQuerySchema = z.object({
+  beforeCursor: z.string().min(1).optional(),
   turnId: z.string().min(1),
   sourceSeqStart: z.string().regex(/^\d+$/),
   sourceSeqEnd: z.string().regex(/^\d+$/),
@@ -982,13 +1002,9 @@ export const threadFilesRawQuerySchema = z.object({
 });
 export type ThreadFilesRawQuery = z.infer<typeof threadFilesRawQuerySchema>;
 
-export const timelineTurnSummaryDetailsRequestSchema = z.object({
-  turnId: z.string().min(1),
-  sourceSeqStart: z.number().int().nonnegative(),
-  sourceSeqEnd: z.number().int().nonnegative(),
-});
-
 export const timelineTurnSummaryDetailsResponseSchema = z.object({
+  olderCursor: z.string().nullable().optional(),
+  historySnapshot: z.string().optional(),
   rows: z.array(timelineRowSchema),
 });
 export type TimelineTurnSummaryDetailsResponse = z.infer<

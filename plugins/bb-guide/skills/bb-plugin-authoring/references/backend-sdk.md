@@ -72,33 +72,58 @@ const child = await bb.sdk.threads.fork({
 
 `PluginBbSdk` is the plugin-bound SDK type. Its `getPluginMetadata` and
 `updatePluginMetadata` calls default to the current plugin's ID. Pass `pluginId`
-explicitly to read or update another namespace; namespace IDs are not ownership
-or authorization boundaries.
+explicitly to read or update another namespace. It must be a plugin ID:
+lowercase letters, digits, and dashes. Namespace IDs are not ownership or
+authorization boundaries.
 Updates atomically shallow-set and remove top-level keys, preserve `null` as
 data, ignore missing removals, and return the complete resulting object. Each
-normalized namespace is limited to 256 KiB of UTF-8 JSON.
+normalized namespace is limited to 256 KiB of UTF-8 JSON. Seeds and `set`
+values must be plain JSON objects. The SDK rejects invalid input before sending
+any request, including a seed or `set` that is over 256 KiB on its own; raw
+HTTP clients get HTTP 400 for it. A patch whose merged namespace would exceed
+the limit fails with HTTP 413 and leaves the namespace unchanged.
 
 Every `bb.agents.configure` callback receives its plugin's current namespace as
 a deep-frozen snapshot at top-level `context.pluginMetadata`, or `{}` when it
-is absent. Spawn and explicit-fork seeds are available during the first
-configuration pass; updates appear during later passes and do not restart or
-alter a running turn.
+is absent. The snapshot is typed deep-readonly (`ReadonlyJsonValue` values),
+and writing to it throws. Spawn and explicit-fork seeds are available during
+the first configuration pass; updates appear during later passes and do not
+restart or alter a running turn. Readonly values are not assignable where the
+SDK expects `JsonValue` or `JsonObject`, such as a child thread's
+`pluginMetadata` seed. Copy them with `JSON.parse(JSON.stringify(value))`
+first.
+
+Any API client, another plugin, or the thread's own agent can write any
+namespace. Treat values as untrusted input. Validate their shape before using
+them, but a well-formed value is not proof of who wrote it: only let metadata
+enable tools that would be safe even if the thread's own agent had set the
+value. When you put values into the instructions your plugin returns, quote or
+escape them so they read as data, not as directions:
 
 ```ts
-bb.agents.configure((context) => ({
-  tools: context.pluginMetadata.issueKey ? ["review-result"] : [],
-  skills: [],
-}));
+bb.agents.configure((context) => {
+  const { issueKey } = context.pluginMetadata;
+  const hasIssue =
+    typeof issueKey === "string" && /^[A-Z]+-\d+$/u.test(issueKey);
+  return {
+    tools: hasIssue ? ["review-result"] : [],
+    skills: [],
+    ...(hasIssue
+      ? { instructions: `Linked issue key (data): ${JSON.stringify(issueKey)}` }
+      : {}),
+  };
+});
 ```
 
 Metadata uses ordinary thread access rules. Do not store secrets in it or use
 it for authorization. BB does not automatically add it to thread DTOs,
-prompts, provider or host payloads, or model input; a plugin may deliberately
-use selected values in the instructions it returns.
+prompts, provider or host payloads, or model input.
 
 `threads.spawn` takes `prompt` (a string) or `input` (structured prompt
-inputs) — never both. Attribution is auto-filled: `origin: "plugin"` and
-`originPluginId: <your id>` unless you set them. `bb.sdk.threads.send({
+inputs) — never both. `threads.spawn` and `threads.fork` auto-fill attribution:
+`origin: "plugin"` and `originPluginId: <your id>` unless you set them. Seeding
+`pluginMetadata` always attributes the new thread to your plugin, overriding an
+explicit `origin` or `originPluginId`. `bb.sdk.threads.send({
 threadId, mode: "auto", input: [...] })` starts a turn on an idle thread or
 queues/steers a running one.
 
@@ -209,14 +234,43 @@ per-attachment remove operation.
 
 For filesystem-backed products that need a tree or mutations,
 `bb.sdk.files.listPaths({ path, includeFiles, includeDirectories, ... })`
-returns recursive relative paths with their kind. `mkdir`, `move`, and `remove`
-apply the same optional `hostId` routing and `rootPath` confinement as
-read/write. Mutations are not automatically retried; `move` refuses to replace
-an existing destination, and `remove` requires `recursive: true` for non-empty
-directories.
+returns recursive relative paths with their kind. Both `list` and `listPaths`
+include dot-prefixed entries unless `includeHidden: false` is passed, and skip
+a default set of dependency and cache directory names (`node_modules`,
+`.pnpm-store`, `.venv`, `venv`, `.turbo`, `.next`, `.cache`, `__pycache__`,
+`.DS_Store`) and the root-relative `.claude/worktrees` subtree unless
+`excludeNames` replaces that set. Each exclusion matches a basename at any
+depth or an exact root-relative path with `/` separators. `.git` and symlinks are never listed.
+`mkdir`, `move`, and `remove` apply the same optional `hostId` routing and
+`rootPath` confinement as read/write. Mutations are not automatically retried;
+`move` refuses to replace an existing destination, and `remove` requires
+`recursive: true` for non-empty directories.
+
+Project and environment workspace file searches honor Git ignore rules, retaining
+tracked and non-ignored untracked files, including hidden files. Generic
+`files.list` and `files.listPaths` retain filesystem listing behavior so tools
+can inspect ignored files. Non-Git workspaces use filesystem listings.
 
 `bb.sdk.files.createPreview({ hostId?, rootPath, ttlMs? })` returns a temporary
 path-shaped `baseUrl`. Append individually encoded relative path segments to
 serve browser assets from that confined host root. This is the preferred
 transport for plugin images and sandboxed HTML with sibling-relative assets;
 preview URLs expire and never reveal the host id or absolute root.
+
+## Standalone machines
+
+`bb.sdk.hosts.experimental_listProviders({ projectId? })` discovers machine providers and their
+input schemas; its optional `projectId` only resolves the environment row shown
+for a project. `bb.sdk.hosts.experimental_create({ machineProviderId, inputs, key?, wait?, signal? })`
+returns a public Host; a machine belongs to no project, and `inputs: null` is
+for a provider that accepts no inputs. Supply a stable key for
+idempotent retries. The default waits until active; `wait: false` returns the
+creating host for polling with `get`. Creation does not create an environment or a thread.
+`bb.sdk.hosts.experimental_suspend({ hostId })` and `resume({ hostId })` require the provider's
+paired suspend/resume operations. They return the updated public Host with HTTP
+202 once the tracked operation starts; read its lifecycle state for completion.
+`retryCleanup({ hostId })` retries failed
+provider teardown. `get({ hostId })` additionally returns nullable
+`connectMachineId` from trusted gate metadata for legacy access revocation;
+Connect now persists its revocation identity during acquire, before enrollment.
+Host lists do not expose that detail.

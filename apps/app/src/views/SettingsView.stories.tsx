@@ -276,8 +276,8 @@ function GeneralSettingsStory({
     <>
       <GeneralSettingsSection
         desktopBrowserAvailable={desktopBrowserAvailable}
+        generalSettingsDisabled={false}
         managedBranchPrefix={state.managedBranchPrefix}
-        managedBranchPrefixDisabled={false}
         onManagedBranchPrefixChange={state.setManagedBranchPrefix}
         navigateToThreadAfterCreate={state.navigateToThreadAfterCreate}
         onNavigateToThreadAfterCreateChange={
@@ -292,9 +292,7 @@ function GeneralSettingsStory({
         rewriteLocalhostLinks={state.rewriteLocalhostLinks}
         richTextEditing={state.richTextEditing}
         steerActiveThreadOnEnter={state.steerActiveThreadOnEnter}
-        steerActiveThreadOnEnterDisabled={false}
         streamerMode={state.streamerMode}
-        streamerModeDisabled={false}
       />
       <DebugSettingsSection
         disabled={false}
@@ -360,43 +358,10 @@ function ExperimentsStory() {
 
   return (
     <ExperimentsSettingsSection
-      changelogPreviewEnabled={state.experiments.changelogPreview}
       disabled={false}
-      editMessagesEnabled={state.experiments.editMessages}
-      mobileAppEnabled={state.experiments.mobileApp}
-      sidebarProgressiveDisclosureEnabled={
-        state.experiments.sidebarProgressiveDisclosure
-      }
-      timelineWindowingEnabled={state.experiments.timelineWindowing}
-      onChangelogPreviewEnabledChange={(enabled) =>
-        state.setExperiments((current) => ({
-          ...current,
-          changelogPreview: enabled,
-        }))
-      }
-      onEditMessagesEnabledChange={(enabled) =>
-        state.setExperiments((current) => ({
-          ...current,
-          editMessages: enabled,
-        }))
-      }
-      onMobileAppEnabledChange={(enabled) =>
-        state.setExperiments((current) => ({
-          ...current,
-          mobileApp: enabled,
-        }))
-      }
-      onSidebarProgressiveDisclosureEnabledChange={(enabled) =>
-        state.setExperiments((current) => ({
-          ...current,
-          sidebarProgressiveDisclosure: enabled,
-        }))
-      }
-      onTimelineWindowingEnabledChange={(enabled) =>
-        state.setExperiments((current) => ({
-          ...current,
-          timelineWindowing: enabled,
-        }))
+      experiments={state.experiments}
+      onExperimentChange={(key, enabled) =>
+        state.setExperiments((current) => ({ ...current, [key]: enabled }))
       }
     />
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useAtom } from "jotai";
 import type { ProviderInfo, ThreadListEntry } from "@bb/domain";
 import { RouteAnchor } from "@/components/ui/app-route-anchor";
@@ -16,15 +16,9 @@ import { Icon } from "@bb/shared-ui/icon";
 import { OverflowFade } from "@/components/ui/overflow-fade";
 import { getThreadRoutePath, isProjectlessProjectId } from "@/lib/route-paths";
 import {
-  hasActiveBackgroundAgentActivity,
-  hasActiveBackgroundCommandActivity,
-  hasActiveGoalActivity,
-  hasActivePlanModeActivity,
-  hasActiveWorkflowActivity,
   getThreadListIndicatorLabel,
-  isRuntimeBusyThread,
-  isUnreadDoneThread,
   resolveThreadListIndicator,
+  threadListIndicatorStateForThread,
   buildChronologicalThreadList,
   type CollapsedChildActivity,
   type ProjectThreadItem,
@@ -243,23 +237,11 @@ function MobileRecentThreadRow({
     hasChildren,
     isCollapsed,
   } = row;
+  const touchStartedBeyondLink = useRef(false);
   const { providers: environmentProviders } = useSystemEnvironmentProviders();
   const threadTitle = getThreadDisplayTitle(thread);
-  const isUnreadDone = isUnreadDoneThread(thread);
-  const isUnreadError = isUnreadDone && thread.status === "error";
-  const indicatorState: ThreadListIndicatorState = {
-    hasPendingInteraction: thread.hasPendingInteraction,
-    hasUnsubmittedDraft,
-    hasUnreadError: isUnreadError,
-    hasUnreadSuccess: isUnreadDone && !isUnreadError,
-    isBackgroundAgentActive: hasActiveBackgroundAgentActivity(thread),
-    isBackgroundCommandActive: hasActiveBackgroundCommandActivity(thread),
-    isGoalActive: hasActiveGoalActivity(thread),
-    queuedWork: thread.queuedWork,
-    isPlanModeActive: hasActivePlanModeActivity(thread),
-    isRuntimeActive: isRuntimeBusyThread(thread),
-    isWorkflowActive: hasActiveWorkflowActivity(thread),
-  };
+  const indicatorState: ThreadListIndicatorState =
+    threadListIndicatorStateForThread(thread, hasUnsubmittedDraft);
   const hasHiddenChildren = hasChildren && isCollapsed;
   const trailingIndicatorState: ThreadListIndicatorState = hasHiddenChildren
     ? {
@@ -303,12 +285,25 @@ function MobileRecentThreadRow({
   const workspaceIconName = getEnvironmentDisplayIconName(
     environmentProviderLookup,
   );
-  const providerIcon = getProviderIconInfo(thread.providerId, provider);
+  const providerIcon = getProviderIconInfo(
+    "agent",
+    thread.providerId,
+    provider,
+  );
   const ProviderMark = providerIcon?.icon;
   return (
     <li
+      onTouchStart={(event) => {
+        const touch = event.touches[0];
+        const link = event.currentTarget.querySelector("a");
+        touchStartedBeyondLink.current =
+          hasChildren &&
+          touch !== undefined &&
+          link !== null &&
+          touch.clientX >= link.getBoundingClientRect().right;
+      }}
       className={cn(
-        "flex items-center rounded-md pr-2",
+        "flex items-center gap-1 rounded-md pr-2",
         MOBILE_RECENT_ROW_HEIGHT_CLASS,
         highlighted && "bg-surface-selected",
       )}
@@ -319,6 +314,13 @@ function MobileRecentThreadRow({
           threadId: thread.id,
         })}
         aria-label={`Open ${threadTitle}${indicatorLabel ? ` — ${indicatorLabel}` : ""}`}
+        onClick={(event) => {
+          const ignoreTouchClick = touchStartedBeyondLink.current;
+          touchStartedBeyondLink.current = false;
+          if (event.detail > 0 && ignoreTouchClick) {
+            event.preventDefault();
+          }
+        }}
         style={{ paddingLeft: getSidebarThreadRowPaddingLeft(depth) }}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
@@ -377,6 +379,7 @@ function MobileRecentThreadRow({
       </RouteAnchor>
       {hasChildren ? (
         <SidebarChildToggleChevron
+          className="size-11 [&_svg]:size-5"
           isCollapsed={isCollapsed}
           expandLabel={`Show threads under ${threadTitle}`}
           collapseLabel={`Hide threads under ${threadTitle}`}

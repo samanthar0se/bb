@@ -1,9 +1,13 @@
 import type {
+  BbPluginApi,
   MessageDispatchHookContext,
   PluginAgentConfigurationContext,
   PluginThreadEventPayloads,
 } from "@get-bb/plugin-sdk";
 
+type HostResponse = Awaited<
+  ReturnType<BbPluginApi["sdk"]["hosts"]["list"]>
+>[number];
 type ThreadResponse = PluginThreadEventPayloads["thread.created"]["thread"];
 type QueueEntry = PluginThreadEventPayloads["message.queued"]["entry"];
 type TurnFailedEvent = PluginThreadEventPayloads["turn.failed"];
@@ -49,6 +53,37 @@ type MessageDispatchHookContextOverrides = Omit<
     NonNullable<MessageDispatchHookContext["queuedMessage"]>
   > | null;
 };
+
+/**
+ * A complete, deterministic host response for faking `bb.sdk.hosts.list()`
+ * and environment-provider contexts. Override only the fields the test cares
+ * about. If the contract grows a required field, this builder fails
+ * typecheck — update the default here.
+ */
+export function makeHostResponse(
+  overrides: Partial<HostResponse> = {},
+): HostResponse {
+  return {
+    id: "host-1",
+    name: "Test host",
+    type: "persistent",
+    status: "connected",
+    machineProviderId: null,
+    lifecycle: {
+      phase: "active",
+      suspendedAt: null,
+      message: null,
+      pendingLog: "",
+      teardown: null,
+    },
+    maxPermissionMode: "full",
+    lastSeenAt: null,
+    lastRejectedProtocolVersion: null,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
 
 /**
  * A complete, deterministic `ThreadResponse` for thread lifecycle event
@@ -212,17 +247,7 @@ export function makeMessageDispatchHookContext(
     createdAt: 0,
     updatedAt: 0,
   };
-  const hostDefaults: NonNullable<MessageDispatchHookContext["host"]> = {
-    id: "host-1",
-    name: "Test host",
-    status: "connected",
-    type: "persistent",
-    maxPermissionMode: "full",
-    lastSeenAt: null,
-    lastRejectedProtocolVersion: null,
-    createdAt: 0,
-    updatedAt: 0,
-  };
+  const hostDefaults = makeHostResponse();
   const project = { ...context.project, ...overrides.project };
   const host =
     overrides.host === undefined

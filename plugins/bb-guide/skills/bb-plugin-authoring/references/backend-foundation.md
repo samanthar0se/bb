@@ -21,7 +21,7 @@ reports the reload failure in its detail. `bb.pluginId` is the plugin's own id.
 The complete top-level factory API is `pluginId`, `log`, `settings`, `storage`,
 `http`, `rpc`, `realtime`, `background`, `cli`, `agents`, `providers`, `ui`,
 `events`, `experimental_hooks`, `experimental_environments`,
-`status`, `server`, `hosts`,
+`experimental_machines`, `experimental_serverAccess`, `status`, `server`, `hosts`,
 `experimental_aiServices`, `sdk`, and `onDispose`.
 
 Keyed registrations must be unique within one factory execution: duplicate
@@ -39,7 +39,7 @@ are additive, so registering multiple listeners is supported.
 ### bb.settings
 
 `bb.settings.define(descriptors)` declares settings descriptors (rendered
-in Extensions → Plugins and editable via `bb plugin config <id> set <key>
+in Settings → Installed plugins and editable via `bb plugin config <id> set <key>
 <value>`). Five descriptor types:
 
 ```ts

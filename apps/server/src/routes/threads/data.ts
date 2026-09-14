@@ -1,8 +1,12 @@
+import { extractThreadContextWindowUsage } from "@bb/thread-view";
+import { clearTimelineOrderingContextCache } from "../../services/threads/timeline-context-order.js";
 import path from "node:path";
 import {
   getAppSettings,
   getThreadPluginMetadata,
   patchThreadPluginMetadata,
+  getLatestCompletedThreadContextClearSequence,
+  listContextWindowUsageRows,
   getLatestThreadSequence,
   getLatestStoredConversationOutlineSequence,
   listQueuedThreadMessages,
@@ -46,6 +50,7 @@ import {
 import { requireThreadStoragePath } from "../../services/threads/thread-storage.js";
 import { toThreadQueuedMessage } from "../../services/threads/thread-queued-messages.js";
 import {
+  toThreadEventWithMeta,
   buildThreadConversationOutlineProjectionKey,
   buildThreadTimelineWithProfile,
   buildTimelineTurnSummaryDetails,
@@ -84,6 +89,10 @@ import {
 } from "../../services/lib/validation.js";
 import { resolveProviderPlanCommand } from "../../services/providers/provider-plan-command.js";
 import { parsePathKindInclusion } from "../path-list-inclusion.js";
+import {
+  DEFAULT_PATH_LIST_EXCLUDE_NAMES,
+  THREAD_STORAGE_PATH_LIST_INCLUDE_HIDDEN,
+} from "../path-list-policy.js";
 import { parseFileListLimit } from "../file-list-query.js";
 import { parseSafeRelativeRoutePath } from "../relative-route-path.js";
 
@@ -306,9 +315,9 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
   deps.hub.onChangedMessage((message) => {
     if (
       message.entity === "thread" &&
-      message.id !== undefined &&
       message.changes.includes("history-rewritten")
     ) {
+      clearTimelineOrderingContextCache(deps.db);
       timelineCache.invalidateThread(message.id);
       timelineLatestRowsCache.invalidateThread(message.id);
     }
@@ -323,22 +332,56 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
   const CONVERSATION_OUTLINE_CACHE_MAX_ENTRIES = 128;
 
   get(routes.pluginMetadata.get, (context, query) => {
-    requirePublicThread(deps.db, context.req.param("id"));
-    return context.json(
-      getThreadPluginMetadata(deps.db, context.req.param("id"), query.pluginId),
+    const thread = requirePublicThread(deps.db, context.req.param("id"));
+    const { metadata, corrupt } = getThreadPluginMetadata(
+      deps.db,
+      thread.id,
+      query.pluginId,
     );
+    if (corrupt) {
+      deps.logger.warn(
+        `Ignoring corrupt plugin metadata for thread ${thread.id}, plugin ${query.pluginId}`,
+      );
+    }
+    return context.json(metadata);
   });
 
   patch(routes.pluginMetadata.update, (context, payload) => {
-    requirePublicThread(deps.db, context.req.param("id"));
-    return context.json(
-      patchThreadPluginMetadata(deps.db, {
-        threadId: context.req.param("id"),
-        pluginId: payload.pluginId,
-        ...(payload.set === undefined ? {} : { set: payload.set }),
-        ...(payload.remove === undefined ? {} : { remove: payload.remove }),
-      }),
-    );
+    const thread = requirePublicThread(deps.db, context.req.param("id"));
+    const result = patchThreadPluginMetadata(deps.db, {
+      threadId: thread.id,
+      pluginId: payload.pluginId,
+      set: payload.set ?? {},
+      remove: payload.remove ?? [],
+    });
+    if (!result.ok) {
+      throw new ApiError(
+        413,
+        "invalid_request",
+        "pluginMetadata exceeds 256 KiB",
+      );
+    }
+    if (result.replacedCorrupt) {
+      deps.logger.warn(
+        `Replaced corrupt plugin metadata for thread ${thread.id}, plugin ${payload.pluginId}`,
+      );
+    }
+    return context.json(result.metadata);
+  });
+
+  get(routes.context, (context) => {
+    const thread = requirePublicThread(deps.db, context.req.param("id"));
+    const sequenceStart =
+      getLatestCompletedThreadContextClearSequence(deps.db, {
+        threadId: thread.id,
+      }) ?? 0;
+    const rows = listContextWindowUsageRows(deps.db, {
+      threadId: thread.id,
+      sequenceStart,
+    });
+    return context.json({
+      usage: extractThreadContextWindowUsage(rows.map(toThreadEventWithMeta)),
+    });
   });
 
   get(routes.timeline, (context, query) => {
@@ -356,7 +399,6 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
     ).showDiagnosticEvents;
     const maxSeq = getLatestThreadSequence(deps.db, {
       threadId: thread.id,
-      excludeDiagnosticEvents: !includeDiagnosticOperations,
     });
     const eventBudget = deps.config.featureFlags.timelineWindowEventBudget;
     const keyArgs = {
@@ -476,6 +518,7 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
     ).showDiagnosticEvents;
     return context.json(
       buildTimelineTurnSummaryDetails(deps.db, thread, {
+        beforeCursor: query.beforeCursor,
         includeDiagnosticOperations,
         providerDisplayName: resolveThreadProviderDisplayName(
           deps,
@@ -618,6 +661,9 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
           path: target.storagePath,
           ...(query.query ? { query: query.query } : {}),
           limit,
+          includeHidden: THREAD_STORAGE_PATH_LIST_INCLUDE_HIDDEN,
+          respectGitIgnore: false,
+          excludeNames: [...DEFAULT_PATH_LIST_EXCLUDE_NAMES],
         },
       });
       return context.json({
@@ -677,6 +723,9 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
           limit,
           includeFiles: inclusion.includeFiles,
           includeDirectories: inclusion.includeDirectories,
+          includeHidden: THREAD_STORAGE_PATH_LIST_INCLUDE_HIDDEN,
+          respectGitIgnore: false,
+          excludeNames: [...DEFAULT_PATH_LIST_EXCLUDE_NAMES],
         },
       });
       return context.json({

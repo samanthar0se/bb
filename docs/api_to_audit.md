@@ -54,8 +54,8 @@ calls it for each matching session and turn with the thread, project, and host
 ids, validates at most 32 environment entries, resolves registration conflicts
 in plugin load order, and sends the winning values to the host. A value may be
 a literal string or a server-relative path that the host expands against its
-authenticated `BB_SERVER_URL`. Contributions override the shell environment;
-entries marked `secret` are masked in provider environment events. The resolver
+authenticated `BB_SERVER_URL`. Contributions override the shell environment and
+their values are reported as-is in provider environment events. The resolver
 receives `ExperimentalPluginProviderEnvContext` and returns
 `ExperimentalPluginProviderEnvEntry` values.
 
@@ -156,8 +156,7 @@ type of `presentation.label`.
   Closing the window: pi stamps `fileRead`/`search` presentation so no live
   row reaches the adapter, then the `legacy-tool-item-backfill` migration
   stamps the old rows, `presentation` becomes required on
-  `item.open`/`item.close`, and the adapter, its tests and
-  `LEGACY_TOOL_ITEM_BACKFILL_MIGRATION` go together.
+  `item.open`/`item.close`, and the adapter and its tests go together.
 
 ## Scheduled removals (next major)
 
@@ -410,6 +409,8 @@ registering the same provider ID cannot recover or remove its resources.
 Migration assigns the three bundled owners explicitly and leaves unknown
 historical owners unassigned, preventing automatic adoption.
 
+Concrete providers and compositions require a nonblank description (up to 200 characters) and icon, alongside their display name. The provider listing exposes both; creation choices show the description unless setup or availability guidance takes precedence. Icons remain required when a frontend slot supplies an override.
+
 A declaration has four eligibility facts in `requires` (`projectCheckout`,
 `gitCheckout`, `gitRemote`, `projectless`), all defaulted to
 false at registration. Optional `inputs` uses Standard Schema v1; core parses it
@@ -421,7 +422,7 @@ must still check mutable conditions and report resource-operation failures.
 
 Core invokes `create` and `remove` and records results directly. Policy drives
 cancellation and retirement; core fixes removal retries at 60 seconds and
-transient creation retries at 30 seconds with a limit of three. Policy exposes
+terminal creation failures; explicit retries start a new attempt on the same row. Policy exposes
 only retirement grace and path-key strategy; creation has no overall core
 timeout. Providers return resource-operation
 results. Created directories include explicit ownsPath. The core lifecycle
@@ -433,8 +434,7 @@ there is no separate persisted hook ledger or process reconciliation. Recovery
 with unknown daemon hook state blocks automatic cleanup and requires inspection.
 Cleanup permits four operations globally and one per host. Progress remains
 durable before reporting returns, but wakes only its launch without invalidating
-configuration or provider availability. recheck schedules another
-ask.
+configuration. recheck schedules another pending launch attempt.
 
 Provider selections are accepted by the SDK, CLI, app, and automations. The
 built-in checkout, worktree, and personal workspace behaviors are first-party
@@ -486,10 +486,16 @@ Core persists launch attempts, progress, cancellation, direct resource
 attachment, retirement deadlines and teardown state in SQLite. Providers supply
 idempotent long-running create and remove calls plus policy. Values retain their
 experimental\_ prefix; public types follow the existing declaration convention.
-The optional `availability(context)` method answers whether the
-provider is available, needs setup, or is unavailable for a project and
-machine. Its context contains project, host, projectCheckout, and gitRemote;
-its named types intentionally have no experimental prefix.
+The optional `availability(context)` method answers whether the provider is
+available, needs setup, or is unavailable for a project and machine. Core
+invokes it in the background for each connected persistent machine when a
+project's providers are listed, caches the answer per project and machine for
+ten minutes or until the plugin rechecks, and reports it through
+`machineAvailability` so pickers can hide unsupported machines without waiting;
+listing never blocks on the answer. Core invokes it again for the selected
+provider and machine during thread creation. Its context contains project,
+host, projectCheckout, and gitRemote; its named types intentionally have no
+experimental prefix.
 
 **Audit before stabilizing.** Verify monotonic attempts and path-key recovery
 across cancellation/restart; per-environment
@@ -502,17 +508,20 @@ removal. The six policy defaults are 5 minutes/60 seconds/30 seconds/3/
 per-thread/null; nullable retirement and create timeout disable those policies.
 EnvironmentStatus remains provisioning/ready/error/destroyed;
 retiring and teardown are lifecycle phases, not restored statuses.
-Audit availability message ownership, cache invalidation on settings and
-recheck, the interaction between the `requires` floor and provider decisions,
-and whether the current decision timeout is appropriate before stabilizing it.
+Audit availability message ownership, create-time error presentation, the
+interaction between the `requires` floor and provider decisions, and whether
+the current decision timeout is appropriate before stabilizing it.
 
 ## `app.slots.experimental_environmentProviderInputs`, `experimental_BranchPicker`, `experimental_useBranches` and `experimental_useCheckoutState` (`@get-bb/plugin-sdk/app`)
 
 **What it does.** The picker-side half of environment providers. The slot
 registers the control the New Thread environment picker renders beside this
 plugin's selected provider (`{ environmentProviderId, component }`; props
-`{ projectId, hostId, value, onChange }` over the selection's `inputs` JSON
-value — `hostId` is the picked machine; `onChange({ status: "ready", value })` supplies valid inputs and
+`{ projectId, target, value, onChange }` over the selection's `inputs` JSON
+value. `target` is `{ kind: "existing-host", hostId: string }` for a selected host
+or `{ kind: "new-host" }` before machine provisioning. This replaces the nullable
+`hostId` prop; backend create still receives the provisioned host.
+`onChange({ status: "ready", value })` supplies valid inputs and
 `onChange({ status: "blocked", reason })` blocks submit with the plugin's reason).
 It is mounted only for a provider that declared `inputs`. A provider whose
 schema accepts empty input can be submitted without a registered slot; any
@@ -558,6 +567,71 @@ and owns the existing/new selection, labels, blocker copy, and emitted inputs.
 5. **Mount-time default.** A control that wants the row submittable at once
    has to report ready from an effect on mount, as the worktree does.
    Decide whether the registration should instead declare a default value.
+
+## `app.slots.experimental_machineProviderInputs` (`@get-bb/plugin-sdk/app`)
+
+Supporting app exports are `PluginMachineProviderInputsRegistration`,
+`PluginMachineProviderInputsProps`, and `PluginMachineProviderInputsChange`.
+
+**What it does.** Registers the compact app control for one machine provider's
+inputs with `{ machineProviderId, component }`. The component receives
+`{ value, onChange }` and reports ready JSON or a blocked reason. It renders in
+the New Thread toolbar when a selected environment composition declares machine
+inputs. A control reports its
+default ready value on mount and loads richer choices only after its shared
+responsive drawer opens. The resulting value is persisted and readable by
+every plugin, so it must contain no secrets; credentials belong in plugin
+settings and the value carries only non-secret configuration or references.
+
+**Audit before stabilizing.** Confirm the compact-chip and responsive-drawer
+shape works across machine providers, that ready/blocked is sufficient, and
+that provider changes and crashed controls cannot retain stale launch inputs.
+
+## `bb.experimental_machines` (`register`)
+
+Registers project-independent machine providers with required id, displayName,
+description and icon; optional ephemeral policy, Standard Schema inputs,
+availability and validate; required create, reconcileCleanup and remove; and optional paired
+suspend/resume callbacks. Core validates descriptions/icons and parses inputs
+at registration/creation boundaries. Inputs and resource JSON must not contain
+credentials. Resource records are bounded to 16 KiB. `PluginMachineProviderResource` excludes
+top-level null; null in storage means no checkpoint exists.
+
+Core owns enrollment, durable launches, cleanup retries and coordinated lifecycle
+transitions. Plugins own allocation, filesystem preservation and idle policy.
+Each `bootstrap` call revokes any pending credential and issues a fresh one for
+the same durable host identity.
+Create returns a readable machine name and opaque resource. Create failures are
+terminal; providers retry vendor API hiccups inside create.
+Create awaits checkpoint before bootstrap. Suspend and
+resume also await checkpoint before destructive cleanup/bootstrap. All three
+checkpoint signatures return Promise<void>; a rejected checkpoint stops the
+provider's subsequent work.
+
+`getResource(hostId)` reads persisted resource metadata across plugins; it does
+not perform vendor observation. The containing namespace is experimental, so
+getResource does not repeat that prefix.
+
+Core clones a project's remote only when the concrete environment provider
+requires a checkout and that host has none. Machine-only registration does not
+create an environment picker row; explicit composition supplies that behavior.
+
+Before stabilization, verify registration validation, creation-key ownership,
+interrupted allocation cleanup, checkpoint rejection, resource privacy, removal
+serialization and same-identity restoration. Machine lifecycle uses removing;
+removal retry timing is internal, not a public retirement policy.
+
+## `@get-bb/plugin-sdk/machine-provider`
+
+Exports provider definitions, input schemas, availability/validation results,
+create and lifecycle contexts, progress and resource/removal results.
+Create receives inputs/key/attempt/checkpoint/report/signal and no project.
+ReconcileCleanup receives the durable key and discovers/removes allocations
+when no checkpoint exists; remove receives known resources. Suspend and resume share the lifecycle
+context and must be registered together. Description and icon are required.
+
+Supporting declarations belong to the experimental machine namespace.
+Stabilization follows the registration audit above.
 
 ## `bb.branding.experimental_icons` (manifest) and namespaced presentation glyphs
 
@@ -969,7 +1043,9 @@ answers when its provider is a user-installed CLI. The probes:
 `experimental_resolveExecutablePath` (the command's absolute path — the path
 itself when given absolute and executable, else the first `which`/`where`
 hit, null when absent; 5 s), `experimental_readCliVersion` (`<command>
---version`, the first `x.y.z[-pre]` on stdout or stderr; 5 s),
+--version` with stdin closed, so CLIs that start a stdio server on unknown
+flags exit instead of hitting the timeout; the first `x.y.z[-pre]` on stdout
+or stderr; 5 s),
 `experimental_commandOutput` (any command's trimmed stdout+stderr or null on
 failure; 15 s), `experimental_versionFrom` (the first version token in a
 banner), `experimental_npmLatestVersion` (`npm view <package> version`) and
@@ -1697,16 +1773,21 @@ while a palette switch resolves, so a consumer never paints an unthemed frame.
 ## `app.slots.experimental_providerIcon` (`@get-bb/plugin-sdk/app`)
 
 **Kept experimental (2026-08-22).** zero shipped registrations — first-party
-agent and environment providers use declared glyphs or SVG assets,
+agent, environment, and machine providers use declared glyphs or SVG assets,
 and the provider catalogs' `glyph` / `logoUrl` icon metadata covers both forms
-without a frontend bundle; the open questions are id squatting and whether the
-slot should exist at all (deleting it is the owner's call).
+without a frontend bundle; the remaining questions concern bundle loading cost
+and rendering behavior.
 
 **What it does.** Lets a plugin frontend supply the React component bb draws
-as one agent or environment provider's icon: `{ providerId, icon }`,
+as one agent, environment, or machine provider's icon: `{ providerKind, providerId, icon }`,
 where `icon` receives only the host's `className` (sizing; agent providers also
 have the declared `strings.iconTint`). The component wins over the provider's
 served `logoUrl`, which the host otherwise draws as a `currentColor` mask.
+Registrations target a provider kind and id. Omitted kinds in older plugins
+normalize to all kinds; exact-kind matches take precedence over all-kind matches.
+Persistent machine labels draw a laptop directly and bypass the slot. Existing
+environment reuse, sidebar, and metadata rows still resolve only built-in glyphs;
+those rows bypass both asset URLs and the slot.
 Registrations are replaced wholesale with the rest of the plugin's slot set,
 so disable/uninstall/failed reload falls back to `logoUrl`, then the declared
 glyph, then the generic glyph. No provider bb ships registers the slot: each
@@ -1716,13 +1797,10 @@ every boot).
 
 **Audit before stabilizing.**
 
-1. **Id squatting and scoping.** `providerId` names a provider in a shared
-   namespace, not a per-plugin slot id, and nothing checks that the plugin
-   registering it also declared that provider. Today the host keeps the first
-   claim by sorted plugin id and warns. Before stabilizing, decide whether the
-   host should reject an icon for a provider the plugin does not own (the
-   frontend does not currently know the registry's provider→plugin mapping),
-   and whether the picker should surface a rejected claim to the user.
+1. **Scoping and overrides.** `providerKind` and `providerId` select the target;
+   cross-plugin icon overrides are allowed. Within each kind/id pair, the first
+   claim by sorted plugin id wins and later claims warn. Verify kind isolation,
+   specific-over-all precedence, and fallback after unload before stabilizing.
 2. **Bundle size and boot ordering.** An icon now costs a frontend bundle: a
    provider plugin that previously shipped only a server entry pays esbuild +
    Tailwind on install and an extra module fetch, and the served logo covers
@@ -1762,6 +1840,10 @@ target one enrolled host or an existing environment;
 omitting it uses primary-machine routing. `disabled` renders the same summary
 without opening the picker. Verified catalogs also normalize an empty or stale
 controlled selection; placeholder, failed, and empty catalogs do not.
+Verified data may come from the machine's stored catalog while a background
+refresh runs, or while that provider's refresh keeps failing or timing out, so
+a model newer than the stored list can be normalized away before a refresh
+lands.
 `allowProviderChange={false}` hides provider tabs while retaining model,
 reasoning, and service-tier selection for the controlled provider. Routing
 never implies provider locking: an environment supplies host/workspace context
@@ -1973,7 +2055,11 @@ window, outside route-owned layout regions and inside `PluginSlotMount`. The
 component receives no props and owns its chrome, positioning, visibility,
 focus, and responsive behavior. It can call app-level SDK hooks and either
 render fixed UI directly or create a React portal without losing plugin,
-router, query, realtime, or sidebar thread/action context. Hooks whose contract
+router, query, realtime, or sidebar thread/action context. Overlays share the
+app's tooltip provider (300 ms delay, hoverable content disabled), including
+through portals; host SDK components need no plugin-owned tooltip provider.
+The pane-local code-highlighting worker pool is not inherited here; its hooks
+support rendering without a pool. Hooks whose contract
 requires a particular surface, including `useComposer` and `useComposerView`,
 remain limited to that surface. One overlay crash hides only that registration;
 sibling overlays remain mounted.
@@ -2080,8 +2166,8 @@ renders in the same footer row.
 ## `app.slots.experimental_sidebarNavigation` (`@get-bb/plugin-sdk/app`)
 
 **What it does.** Replaces the bounded sidebar navigation controls for New
-thread, Search threads, Extensions, and plugin panel destinations. The plugin
-receives semantic items, split-drag bindings, and one host activation callback.
+thread, Search threads, Plugins, Skills, and plugin panel destinations. The
+plugin receives semantic items, split-drag bindings, and one host activation callback.
 BB retains the drawer, thread list, footer, resize handle, and hidden-body
 shortcut policy.
 
@@ -2504,9 +2590,9 @@ too, after the host has restored the draft. Sole consumer:
 
 ## Desktop browser control
 
-`bb.sdk.experimental_desktopBrowsers` and the exported `ExperimentalDesktopBrowsersArea`, `ExperimentalDesktopBrowserScope`, `ExperimentalDesktopBrowserLease`, `ExperimentalDesktopBrowserCreateInput`, and `ExperimentalDesktopBrowserAcquireInput` expose explicit host/window/thread discovery, isolated tab creation, expiring control leases, scoped CDP connections, capture, reveal, close, release, and disposable tab-state subscriptions. The matching core CLI is `bb browser`.
+`bb.sdk.experimental_desktopBrowsers` and the exported `ExperimentalDesktopBrowsersArea`, `ExperimentalDesktopBrowserScope`, `ExperimentalDesktopBrowserLease`, `ExperimentalDesktopBrowserCreateInput`, and `ExperimentalDesktopBrowserAcquireInput` expose explicit host/window/thread discovery, isolated tab creation, expiring control leases, scoped CDP connections, capture, reveal, close, release, disposable tab-state subscriptions, and cookie import from an installed browser through `listImportSources` and `importCookies` (`ExperimentalDesktopBrowserInstanceRequest`, `ExperimentalDesktopBrowserImportCookiesInput`, `ExperimentalDesktopBrowserImportSources`, `ExperimentalDesktopBrowserImportOutcome`). The matching core CLI is `bb browser`.
 
-Before stabilization, audit personal-profile handoff policy, per-tab mutual exclusion and child-target scope, native popup handling, debugger detachment, daemon/desktop disconnect and reconnect generations, expiry and cancellation races, bounded screenshot bytes, and cross-platform desktop startup. Connection credentials must remain private to workers on the browser host. `subscribe` polls every two seconds with one outstanding request; it is state observation, not a lossless event log. Cloud browsers and external provider registration are outside this surface.
+Before stabilization, audit cookie import authorization: any caller with server access can copy the desktop user's browser sessions into a BB profile, including an automation profile an agent controls, with OS consent only where the platform demands it (macOS Keychain for Chromium, Full Disk Access for Safari; none for Firefox or keyring-free Linux Chromium). Decide whether imports into automation profiles need an explicit handoff like personal-tab control, and whether the daemon should require a desktop-side confirmation. Also audit personal-profile handoff policy, per-tab mutual exclusion and child-target scope, native popup handling, debugger detachment, daemon/desktop disconnect and reconnect generations, expiry and cancellation races, bounded screenshot bytes, and cross-platform desktop startup. Connection credentials must remain private to workers on the browser host. `subscribe` polls every two seconds with one outstanding request; it is state observation, not a lossless event log. Cloud browsers and external provider registration are outside this surface.
 
 ## Host process primitives (`@get-bb/plugin-sdk/host`)
 
@@ -2549,3 +2635,340 @@ describing it as merely too large.
    boolean indicating whether a detail read can succeed.
 3. Verify old persisted previews and mixed-version clients still receive a
    deterministic state before making the field stable.
+
+## Document Markdown (`MarkdownProps.experimental_document`)
+
+The existing Markdown component accepts explicit `{ target, rootPath, threadId }`
+document context. `target` is an existing workspace or thread-storage live-file
+identity; `rootPath` is its resolved filesystem root. Relative links and images
+resolve from the document directory within that root. Links open the explicit
+file target; images use the selected thread's existing source-confined route.
+Thread-storage targets must name the same thread. Omission retains message
+routing; malformed context does not fall back to the ambient workspace.
+Explicit absolute paths retain existing host-file behavior. HTML is unaffected.
+Stabilize after plugin consumers verify nested paths, source identity, missing
+files, containment and line locations, then rename and remove this audit entry.
+
+## `PluginFileOpenerProps.experimental_lineRange` (`@get-bb/plugin-sdk/app`)
+
+**What it does.** Passes the owning file tab's latest one-based, inclusive
+`{ startLineNumber, endLineNumber }` range to its opener. `null` means no
+requested navigation; older hosts may omit the optional property. The app
+supplies a new object on each targeted open, even when the active file and
+line numbers match. Openers should observe that identity, reveal the latest
+range after asynchronous loading, and navigate without replacing an existing
+editor model. Monaco selects the complete lines and clamps targets past EOF.
+Columns are not part of the existing preview range contract.
+
+The range uses the existing tab owner and persistence policy. This adds no
+RPC fields, server-daemon messages, file permissions, or new CLI syntax.
+Existing `bb thread open <thread> <path> --line <line>` / SDK thread-open requests
+and plugin file navigation feed the same opener boundary.
+
+**Audit before stabilizing.**
+
+1. Verify first, changed, identical, and rapid targets across workspace, host,
+   and thread-storage files, tab remounts, and server synchronization.
+2. Validate the identity-based repeat signal with third-party openers and
+   decide whether an explicit request sequence is needed before stabilization.
+3. Confirm absent-target, inclusive selection, EOF clamping, column support,
+   file-tree navigation, and unsaved-edit behavior with more editor consumers.
+4. Verify older hosts omit the prop safely and older plugins ignore it; audit
+   reload restoration and cross-client range updates under the existing tab policy.
+
+## `bb.experimental_serverAccess.recheck`
+
+`recheck` sends a system `config-changed` notification to connected clients.
+It carries no payload. Connect signals when its paired state or public URL
+changes, rather than on every tunnel status publish.
+
+The configuration response refreshes registered providers' availability in
+parallel, with a five-second deadline per check. Exceptions, invalid output, and
+timeouts produce an unavailable result without exposing raw provider errors.
+Machines settings, manual setup, and promptbox banners consume this same status.
+Reading configuration never acquires a grant; acquisition checks its selected
+provider independently, including when an existing machine retains an older
+provider selection.
+
+Stabilization requires proving that a recheck from an unregistered or disposed
+plugin is inert, that a provider cannot use it to force repeated refreshes of
+unrelated configuration, and that pairing, unpairing and credential rejection
+each reach the Machines settings section without a manual reload.
+
+## `bb.experimental_serverAccess.register`
+
+Availability may include an optional public `serverUrl`. Core validates HTTP(S)
+URLs without embedded credentials before exposing them through configuration.
+Machines settings displays that URL for available providers; an available result
+without a URL is valid. The acquired grant's URL still drives machine traffic.
+
+`PluginServerAccess` registers server access through `ServerAccessProviderDeclaration`: id,
+displayName, description, availability, acquire({ key, hostId, signal }) and
+release({ key, hostId, grantId }). Acquire returns either a `ServerAccessGrant` carrying
+`{ id, serverUrl, headers?: Record<string, string> }` or
+`{ status: "failed", message }`.
+Machines attach these optional headers to enrollment, HTTP, WebSocket and runtime
+requests. A direct grant omits headers; access providers own credential redemption.
+Core chooses the configured access provider and retains it for the machine. Core persists only
+provider id and grant id per host; credentials travel in bootstrap delivery.
+Direct access reads machineServerUrl with BB_EXTERNAL_URL fallback.
+defaultMachineAccess selects a provider; otherwise core uses the first registered
+provider, or direct when none are registered. Access covers account-pool and other
+runtime requests after enrolment. Connect redeems Cloud codes server-side and persists connectMachineId with the
+grant before returning it, allowing release to revoke even before enrollment.
+Host detail retains connectMachineId from trusted gate metadata for legacy grants.
+
+The failed acquisition result exposes its deliberate user-safe recovery message
+through the plugin boundary; ordinary thrown errors stay redacted. Release receives a null grantId when acquire was interrupted. Core persists the
+provider before acquisition and retries release by key and hostId. Keep intent and credential-bearing grants in private plugin storage; never
+put credentials in machine resources, inputs, or progress output.
+
+Before stabilization, prove retry-safe acquire/release across process death,
+credential privacy and revocation, explicit and automatic defaults, expired
+codes, removal while a provider is unavailable, and both enrolment and runtime
+traffic with independent direct and Connect consumers. Availability does not
+prove reachability from a remote machine.
+
+## Machine enrollment and bootstrap
+
+`bb.experimental_machines.bootstrap` prepares enrollment and waits for the daemon connection. Enrollment keys are scoped to the calling plugin and retain their host identity. Pending credentials are single-use and short-lived. Manual bootstrap bundles live only in server memory, so the user regenerates the command after a restart. Bootstrap bundles carry optional access headers. A successful exchange is recovered as `enrolled` after a server crash.
+
+`MachineExecutor` requires argv, stdin, a timeout, an abort signal, and an output callback; it returns only an exit code. `bootstrap` requires the executor, passes the bundle through private stdin, and streams command output into progress logs. It installs pending enrollments and restarts enrolled identities after snapshot restoration. Core Manual setup uses internal enrollment operations. Bootstrap returns the reserved host ID. Installation requires Node, npm, and curl and installs no OS packages. Cancellation propagates through enrollment preparation and access acquisition.
+
+Stabilization requires independent Modal and SSH consumers, failure verification for expired credentials, concurrent retries, interrupted exchange, cancellation, identity mismatch, and restored snapshots, plus an audit that credentials never enter resource data or logs. Migration and live vendor verification remain part of the integration release gate.
+
+The bootstrap surface's supporting exports are `MachineExecutorRequest`,
+`MachineExecutor`, `MachineBootstrapRequest`, and `MachineBootstrapApi`.
+They belong to experimental `PluginMachines`; their unprefixed names do not
+indicate stabilization. Bootstrap uses executor `exec`. Create must persist an
+allocated resource with `await checkpoint(resource)`, then bootstrap with its
+durable key. Stabilization must verify cleanup
+of checkpointed allocation before successful enrollment, including safe no-op
+uninstall when installation never began, and retry after partial installation.
+
+## Machine provider `reconcileCleanup`
+
+Required reconciliation-only cancellation callback on `PluginMachineProviderDefinition`.
+It remains experimental through `bb.experimental_machines`; the unprefixed callback
+name does not indicate stabilization.
+Core supplies the durable launch key, progress reporter and a cleanup signal.
+This callback is only used without a resource checkpoint; remove receives known resources. Providers discover and remove uncertain
+allocations using vendor tags, names or metadata; the callback must never allocate or bootstrap.
+Return removed only after cleanup is settled (including no submitted allocation), or
+failed while the allocation is unresolved. Core persists the core cleanup retry deadline
+across sweeps and restarts, including subsequent access release failures.
+Stabilization requires crash/abort coverage before submission, after submission but
+before checkpoint, eventual vendor discovery, and access-release retry coverage for
+each shipped provider.
+
+## Machine provider `ephemeral`
+
+Optional boolean on `PluginMachineProviderDefinition`, defaulting to false.
+Providers set it only when they create disposable compute. After the last
+live thread and its creating/ready machine launch are gone, core automatically
+requests removal regardless of environment retirement policy. Ephemeral removal
+does not invoke environment providers or resume suspended compute; after compute
+removal succeeds, core marks every attached environment destroyed with teardown
+removed as read-only history. The request uses the ordinary durable machine
+removal lifecycle, including `removeRetryAt` retries. Manually enrolled machines and providers
+that omit the field are never automatically removed. Stabilization requires
+another compute provider and recovery coverage across environment retirement,
+live-work races, provider unavailability, and repeated removal failures.
+
+### Machine lifecycle allocation checkpoint
+
+`PluginMachineProviderLifecycleContext.checkpoint(resource): Promise<void>` on
+the experimental machine-provider contract persists a bounded recovery record.
+Create extends this context; suspend and resume add the current host and resource.
+It is not a filesystem save, and daemon-connected is not agent-ready: checkout
+setup and provider authentication remain core work.
+Core fences provider ownership, lifecycle phase and a persisted operation ID;
+stale resume, suspend and removal completions cannot replace newer state. Restart
+uses the checkpoint with the same enrollment key. Stabilization requires real-DB
+crash recovery after allocation/before bootstrap, competing lifecycle operations,
+wrong-owner rejection and no duplicate enrollment. Standalone launch submission
+is durable; SDK submit/launch/follow/cancel match CLI create/status/cancel.
+
+Unknown-allocation reconciliation, known-resource removal, and access release
+retain failed cleanup state and retry at the core retry interval until successful.
+
+## Transient provider setup data
+
+Manual setup is built into core. Core keeps the
+manual bootstrap bundle in memory and serves the command and expiry through the
+host-keyed enrollment-command endpoint. Reading does not renew the enrollment.
+Completion, removal, expiry, and server restart remove the cached command. Commands stay out of
+persisted progress and transcripts. Machine credentials cannot retrieve commands.
+
+Stabilization requires expiry/removal, credential authorization and
+transcript-redaction coverage.
+
+## Project checkout ownership
+
+The provider context's `projectCheckout.experimental_ownsPath` identifies a
+checkout materialised by core. The field is a required boolean whenever a
+checkout is present, derived from persisted source ownership, never
+from caller inputs. Project checkout reports ownsPath only for that exact path,
+so core's environment hook policy applies to fresh machine clones and leaves
+user-maintained attachments alone. Audit ownership propagation and recovery before stabilizing.
+
+## Coordinated machine maintenance
+
+Plugins own idle timing using event notifications, plugin KV and background schedules.
+Core does not impose a second idle timeout or veto pause merely because work is active.
+
+`bb.sdk.hosts.experimental_suspend({hostId})` accepts follow-ups into the existing host-wait queue, drains active turns, setup hooks
+and terminals with a five-minute bound, then invokes the provider's suspend callback.
+It rejects with `machine_busy` while persisted state still ties a live thread launch or a
+provisioning environment to the host, or while core is preparing a project checkout there.
+Automatic idle schedulers retry after that state clears.
+`await suspend.checkpoint(resource)` durably persists opaque provider state before destructive
+cleanup. Core fences operations and resumes the same host identity without rerunning checkout setup. Providers own vendor observations, snapshots, loss reporting,
+and expiry scheduling using `bb.background.schedule` and startup reconciliation.
+Providers must reserve the full drain bound plus snapshot time and scheduling jitter;
+a server outage or late wake cannot guarantee preservation. Unsafe recovery must fail
+inside the provider; a dispatch hook is not an integrity boundary.
+
+The host DTO's lifecycle phase and progress expose maintenance state and suspension
+or resume failures. Explicit machine removal remains available.
+Stabilization requires interruption, checkpoint/restart, removal serialization,
+failed drain, bounded drain and same-identity restore tests.
+
+## Thread-sequence and terminal-input notifications
+
+`PluginEvents.on("experimental_thread.events", handler)` delivers `{thread, sequence}`.
+Core coalesces appends per thread into one notification per one-second window, reading
+the latest sequence and current public thread DTO at delivery. Continuous output is
+reported periodically; the last pending window is delivered after output stops.
+Reads/polling do not emit it. No contents, replay, activity classification or veto.
+
+`PluginEvents.on("experimental_terminal.input", handler)` delivers `{terminal}` after
+real nonempty user input is forwarded, including interactive terminal input. No input
+contents, output or keepalives are exposed. The public terminal DTO identifies its host.
+
+Modal v1 bumps its own idle clock when the delivered thread is active, and on terminal
+input to its machines. It does not fetch or classify thread events. Stabilization
+requires coalescing tests, live streaming/terminal verification, current-status behavior,
+and review of event delivery overhead. No daemon wire change is required.
+
+Follow-ups before the suspend callback cancel preparation after work stopping settles.
+After callback invocation, core completes pause and resumes for queued work. Reconnection
+alone must not release work during preservation. Cancellation is reported as a rejected
+pause, not a successful save.
+
+## `bb.experimental_machines.getResource`
+
+Returns core’s current persisted host resource as JSON, or null when the host or
+resource is absent. Reads are available across plugins, following the host access
+model; callers parse provider-specific data. Resources must contain identifiers
+and configuration, never credentials. This lets provider RPCs inspect existing
+machines without duplicating lifecycle state in plugin KV. Stabilization requires
+validating missing-resource semantics and use by additional machine providers.
+
+## Environment compositions
+
+`bb.experimental_environments.register({ id, displayName, description, icon, machineProviderId,
+environmentProviderId })` declares a new-machine environment option backed by
+one concrete environment provider. It cannot also supply lifecycle callbacks
+or inputs. Its required icon is resolved from the composition’s owning plugin;
+a provider-icon slot may customize its rendering. The server resolves the references before creating the launch,
+persists the concrete provider and explicit machine selection, and uses the
+existing provisioning lifecycle. Machine registration alone adds no picker row.
+
+The environment-provider listing includes nullable `machineProviderId` and, for
+compositions only, the target `environmentProviderId`. Clients keep the composition’s label and mount the target provider’s input
+controls without changing the submitted composition ID.
+Compositions appear outside host groups; explicit SDK/CLI creation omits machine
+selection. Ordinary environment selections still require a machine. Core rejects
+conflicting machine selectors, missing referenced providers and required missing
+Git remotes before allocation. Modal combines its machine with project-checkout;
+core retains checkout cloning, project-source registration and setup hooks.
+A clone failure leaves the ready machine intact and records the thread error.
+
+Stabilization requires UI/CLI parity, registration validation, pre-allocation
+refusals, provisioning timeline coverage, clone-failure machine retention and
+later project-checkout/worktree reuse. There is no clone plugin or new lifecycle.
+
+For new-machine composition inputs, `experimental_useBranches` accepts a null
+host and obtains branch suggestions from the project’s default local source.
+Project-checkout treats that selection as a fresh clone: no source-checkout
+conflict/dirty-state blockers apply, and an omitted branch uses the repository
+default. Explicit branch inputs still pass to the concrete provider.
+
+## Experimental host SDK machine operations
+
+New host methods are experimental_create, experimental_getEnrollmentCommand,
+experimental_listProviders, experimental_suspend, experimental_resume and
+experimental_retryCleanup. There are no unprefixed aliases. Creation returns a
+reserved host immediately when `wait: false`; otherwise it polls that host until
+active. The enrollment-command method exists for the manual setup UI and CLI and
+returns a credential only while that host is creating.
+
+Before stabilizing, verify creation cancellation through host removal,
+same-host restoration, serialized removal, plugin callers and UI/CLI parity.
+
+
+## `app.experimental_icons.register` and `experimental_Icon`
+
+Plugins register inline React artwork during app setup with `{ name, component }`.
+Names are trimmed, nonempty strings; namespaces are recommended but optional.
+Names are shared across plugins, and any client component or app icon field may
+reference them. Registration returns `void`. Duplicate names within one plugin
+reject setup; across plugins the first plugin id in lexical order wins and the
+host warns about collisions. All explicit registrations override built-ins.
+The host commits icons with the plugin's other app registrations and removes
+or replaces them on unload or reload, restoring the next owner or built-in.
+A rejected setup leaves the previous generation intact.
+
+`experimental_Icon` is the same renderer used by host app icons. It accepts
+`name`, optional `fallback` (default `Zap`), `className`, `style`, `aria-label`,
+and `aria-hidden`. Custom components receive sizing through `className`; the
+host owns the accessible wrapper and applies tint through inherited color.
+Missing references try the fallback, then the built-in `Zap`. Recursive
+components terminate at the underlying built-in or `Zap`; throwing components
+are contained and recover when their registration is replaced. Mounted icons
+subscribe to changes in their requested and fallback definitions.
+
+This is an app registry, independent of all manifest branding and declared SVG
+asset contracts. It adds no server/daemon wire fields, persisted icon definitions,
+or cross-client delivery. Mobile and desktop load the same web app and plugin
+frontend registrations. Server-side presentation validation remains unchanged;
+registering an app icon does not declare a manifest SVG or authorize a new
+namespaced server presentation glyph.
+
+Before stabilizing, audit component sizing and accessibility, fallback behavior,
+collision precedence, whether per-registration disposal is needed beyond the
+existing setup lifecycle, and compatibility for plugins vendoring older Icon
+components. The existing built-in icon list and artwork remain fixed; new
+plugin app icons use this registration API. The manifest API is unchanged,
+and individual plugins can still declare their own branding SVG assets using
+the existing manifest fields.
+
+
+## `experimental_ProviderIcon`
+
+Shared frontend renderer for agent, machine, and environment provider artwork,
+exported from `@get-bb/plugin-sdk/app`. Pass required `providerKind` and the
+existing record as `provider`, plus optional
+`fallback` (default `Code`), `className`, `aria-label`, and `aria-hidden`.
+The renderer reads `provider.id`, `logoUrl`, `icon` (agent `{ glyph }` or machine/environment
+string), and `strings.iconTint`. It performs no fetch; `{ id }` alone resolves
+frontend slot registrations and fallback. Marks are decorative by default.
+Resolution is a matching kind/id override, then a legacy unscoped override,
+supplied logo mask, supplied glyph through
+the app registry, then fallback. Invalid tints are ignored. Overrides update on
+load/reload/unload, remount per generation, and fall back on render errors or
+recursive provider references. Without an accessible label the mark is decorative.
+
+The BB provider helper, machine/environment provider marks, Provider Usage and Tasks
+comment avatars use the same renderer. Both plugin responses preserve the SDK's
+`icon` and `strings.iconTint` field shapes so callers pass records directly. Tasks
+adds this artwork to computed comment-provider RPC data; no persisted records, manifest API,
+server/daemon wire fields or registration lifecycle change. This rendering-only
+surface uses existing provider SDK queries and CLI provider/plugin management.
+
+Stabilization: audit SDK prop ergonomics against all three provider kinds,
+same-id isolation and legacy override fallback,
+asset-vs-glyph precedence, cross-plugin overrides, reload/error/recursion behavior,
+accessibility and theme rendering on desktop and mobile. Keep metadata fetching
+and plugin branding separate from provider artwork resolution.

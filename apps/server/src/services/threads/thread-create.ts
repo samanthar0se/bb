@@ -1,4 +1,4 @@
-import { withEnvironmentPathAdmission } from "../environments/path-admission.js";
+import { assertEnvironmentPathAvailable } from "../environments/path-admission.js";
 import {
   deleteThread,
   getEnvironment,
@@ -29,13 +29,16 @@ import {
   resolveProjectExecutionDefaultsForCreate,
 } from "./project-execution-defaults.js";
 import { validatePromptAttachmentReferences } from "../projects/attachments.js";
-import { resolvePluginMentionContextInputs } from "../plugins/plugin-mentions.js";
+import {
+  appendPluginMentionContext,
+  captureUserMessageSentTelemetry,
+} from "./thread-send.js";
 import {
   attemptDispatch,
   hostIdForEnvironmentIntent,
   type PendingThreadStartContext,
 } from "./dispatch-attempt.js";
-import { setThreadPendingStartContext } from "@bb/db";
+import { setThreadStartupContext } from "@bb/db";
 import { emitPluginThreadDeleted } from "../plugins/plugin-thread-events.js";
 import {
   createThreadRecord,
@@ -46,7 +49,10 @@ import {
   resolveStableThreadRequestEnvironment,
   type ResolvedStableThreadRequestEnvironment,
 } from "./thread-request-eligibility.js";
-import { resolveThreadEnvironmentPlacement } from "./thread-environment-placement.js";
+import {
+  requireEnvironmentPlacementHost,
+  resolveThreadEnvironmentPlacement,
+} from "./thread-environment-placement.js";
 import {
   buildProviderThreadExecutionDefaults,
   resolveCreateThreadEnvironment,
@@ -57,9 +63,12 @@ import {
   type ThreadCreateServiceRequest,
 } from "./thread-create-request.js";
 import { deriveTitleFallback } from "./title-generation.js";
-import type { ThreadProvisionEnvironmentIntent } from "./thread-provisioning-context.js";
+import type { ThreadProvisionEnvironmentIntent } from "./thread-startup-store.js";
 import { resolveSystemProviderModels } from "../system/execution-options.js";
-import { getEnvironmentProvider } from "../plugins/plugin-environment-provider-registry.js";
+import {
+  getEnvironmentProvider,
+  listEnvironmentCompositions,
+} from "../plugins/plugin-environment-provider-registry.js";
 
 type ThreadCreateDeps = LoggedPendingInteractionWorkSessionDeps;
 
@@ -343,19 +352,12 @@ async function createPendingThreadAndAttemptFirstDispatch(
     args.environmentId === null
       ? null
       : getEnvironment(deps.db, args.environmentId);
-  const create = () =>
-    createThreadRecord(deps, {
-      request: args.request,
-      environmentId: args.environmentId,
-    });
-  const thread =
-    environment === null
-      ? create()
-      : await withEnvironmentPathAdmission(
-          deps,
-          { ...environment, threadId: null },
-          create,
-        );
+  if (environment !== null)
+    assertEnvironmentPathAvailable(deps, { ...environment, threadId: null });
+  const thread = createThreadRecord(deps, {
+    request: args.request,
+    environmentId: args.environmentId,
+  });
   let execution: Awaited<ReturnType<typeof buildExecutionOptions>>;
   try {
     if (
@@ -389,13 +391,15 @@ async function createPendingThreadAndAttemptFirstDispatch(
       startedOnBehalfOf: args.request.startedOnBehalfOf,
       titleProvided: Boolean(args.request.title),
     };
-    // Recorded BEFORE the attempt, not after it queues: the attempt drives
-    // provisioning off this stack when it clears, and a context written
-    // afterwards would race that. Writing it unconditionally and clearing it
-    // when the thread leaves `pending` keeps one owner for the field.
-    setThreadPendingStartContext(deps.db, {
+    const placementHostId = hostIdForEnvironmentIntent(
+      deps,
+      args.environmentIntent,
+    );
+    if (placementHostId !== null)
+      requireEnvironmentPlacementHost(deps, placementHostId);
+    setThreadStartupContext(deps.db, {
       threadId: thread.id,
-      pendingStartContext: JSON.stringify(startContext),
+      startupContext: JSON.stringify({ kind: "pending", ...startContext }),
     });
 
     await attemptDispatch(deps, {
@@ -451,6 +455,28 @@ function resolveCreateThreadVisibility(
   return args.parentThread?.visibility ?? "visible";
 }
 
+function resolveCreateThreadPluginMetadata(
+  request: Pick<
+    ThreadCreateServiceRequestInput,
+    "originPluginId" | "pluginMetadata"
+  >,
+): ThreadCreateServiceRequest["pluginMetadata"] {
+  if (request.pluginMetadata === undefined) {
+    return null;
+  }
+  if (request.originPluginId === undefined) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      'pluginMetadata requires origin "plugin"',
+    );
+  }
+  return {
+    pluginId: request.originPluginId,
+    metadata: request.pluginMetadata,
+  };
+}
+
 export async function createThreadFromRequest(
   deps: ThreadCreateDeps,
   rawRequestInput: ThreadCreateServiceRequestInput,
@@ -478,13 +504,11 @@ export async function createThreadFromRequest(
       'originPluginId requires origin "plugin"',
     );
   }
+  const pluginMetadata = resolveCreateThreadPluginMetadata(rawRequestInput);
   const requestInput = { ...rawRequestInput };
-  const pluginMentionContext = await resolvePluginMentionContextInputs(
-    requestInput.input,
-  );
-  if (pluginMentionContext.length > 0) {
-    requestInput.input = [...requestInput.input, ...pluginMentionContext];
-  }
+  requestInput.input = (
+    await appendPluginMentionContext({ input: requestInput.input })
+  ).input;
   assertProjectWorkspaceCompatibility(project, requestInput);
   const originKind = requestInput.originKind ?? null;
   const sourceThreadId =
@@ -587,6 +611,7 @@ export async function createThreadFromRequest(
   const {
     originKind: _requestedOriginKind,
     parentThreadId: _requestedParentThreadId,
+    pluginMetadata: _requestedPluginMetadata,
     sourceThreadId: _requestedSourceThreadId,
     ...requestRest
   } = requestInput;
@@ -601,7 +626,11 @@ export async function createThreadFromRequest(
   if (
     requestedEnvironment.type === "provider" &&
     getEnvironmentProvider(requestedEnvironment.environmentProviderId) ===
-      undefined
+      undefined &&
+    !listEnvironmentCompositions().some(
+      (record) =>
+        record.composition.id === requestedEnvironment.environmentProviderId,
+    )
   ) {
     throw new ApiError(400, "invalid_request", "unknown environment provider");
   }
@@ -612,6 +641,7 @@ export async function createThreadFromRequest(
       : {}),
     ...(sourceThread ? { sourceThreadId: sourceThread.id } : {}),
     originKind,
+    pluginMetadata,
     visibility: resolveCreateThreadVisibility({
       parentThread,
       requestedVisibility: requestInput.visibility,
@@ -633,7 +663,9 @@ export async function createThreadFromRequest(
     resolvedEnvironment !== null
       ? childHostIdForResolvedEnvironment(resolvedEnvironment)
       : request.environment.type === "provider"
-        ? request.environment.machine.hostId
+        ? request.environment.machine?.type === "existing"
+          ? request.environment.machine.hostId
+          : null
         : null;
   assertForkSourceHost(deps, {
     childHostId,
@@ -646,7 +678,8 @@ export async function createThreadFromRequest(
   const modelCatalogCwd =
     resolvedEnvironment !== null
       ? modelCatalogCwdForResolvedEnvironment(resolvedEnvironment)
-      : request.environment.type === "provider"
+      : request.environment.type === "provider" &&
+          request.environment.machine?.type === "existing"
         ? projectCheckoutPathOnHost(
             deps,
             request.projectId,
@@ -716,13 +749,10 @@ export async function createThreadFromRequest(
     (request.startedOnBehalfOf?.initiator ?? "user") === "user" &&
     request.input.length > 0
   ) {
-    deps.telemetry.capture({
-      name: "user_message_sent",
-      properties: {
-        is_child_thread: parentThread !== null,
-        message_source: "thread_create",
-        provider: request.providerId,
-      },
+    captureUserMessageSentTelemetry(deps, {
+      isChildThread: parentThread !== null,
+      messageSource: "thread_create",
+      providerId: request.providerId,
     });
   }
   return thread;

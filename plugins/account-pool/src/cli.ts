@@ -9,6 +9,7 @@ import {
   bypassInputSchema,
   codexLoginPollInputSchema,
   loginCompleteInputSchema,
+  modelFamilySchema,
   tokenRotateInputSchema,
   routingSetInputSchema,
   type AccountPoolConfig,
@@ -18,7 +19,7 @@ import {
   type FamilyQuota,
   type LimitWindow,
   type ModelFamily,
-  type PoolStatus,
+  type PoolStatusReport,
 } from "./contracts.js";
 import type { PoolOperations } from "./operations.js";
 import type { ClaudeOAuthLogin } from "./oauth-login.js";
@@ -97,14 +98,6 @@ function formatUtilization(value: number | null): string {
   return value === null ? "-" : `${Math.round(value * 100)}%`;
 }
 
-const MODEL_FAMILIES: ModelFamily[] = [
-  "fable",
-  "sonnet",
-  "opus",
-  "haiku",
-  "other",
-];
-
 function familyLabel(family: ModelFamily): string {
   return family[0]?.toUpperCase() + family.slice(1);
 }
@@ -139,13 +132,14 @@ function formatFamilyQuota(quota: FamilyQuota | null): string {
 
 function formatAccounts(accounts: readonly AccountSummary[]): string {
   if (accounts.length === 0) return "No accounts configured.";
-  const families = MODEL_FAMILIES.filter((family) =>
+  const families = modelFamilySchema.options.filter((family) =>
     accounts.some((account) => account.familyWeekly[family] !== null),
   );
   return [
     [
       "ID",
       "Label",
+      "Email",
       "Provider",
       "Kind",
       "Enabled",
@@ -162,6 +156,7 @@ function formatAccounts(accounts: readonly AccountSummary[]): string {
       [
         account.id,
         account.label,
+        account.email ?? "-",
         account.provider,
         account.kind,
         String(account.enabled),
@@ -180,7 +175,7 @@ function formatAccounts(accounts: readonly AccountSummary[]): string {
   ].join("\n");
 }
 
-function formatStatus(status: PoolStatus): string {
+function formatStatus(status: PoolStatusReport): string {
   return [
     `Route: ${status.route}`,
     `Accepting: ${status.accepting}`,
@@ -556,7 +551,15 @@ export function registerPoolCli(
         }
         if (argv[0] === "status") {
           const flags = parseFlags(argv.slice(1), ["json"], []);
-          const status = await operations.status();
+          const [poolStatus, routedThreadsWithoutLocalLogin] =
+            await Promise.all([
+              operations.status(),
+              operations.routedThreadsWithoutLocalLogin(),
+            ]);
+          const status: PoolStatusReport = {
+            ...poolStatus,
+            routedThreadsWithoutLocalLogin,
+          };
           return {
             exitCode: 0,
             stdout: flags.booleans.has("json")

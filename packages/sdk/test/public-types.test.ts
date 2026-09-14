@@ -274,16 +274,22 @@ type ExpectedGuideKey = "render";
 
 type ExpectedHostsKey =
   | "cloneDefaultPath"
+  | "experimental_create"
+  | "experimental_getEnrollmentCommand"
   | "createJoinCode"
   | "delete"
   | "directory"
   | "get"
   | "installProviderCli"
   | "list"
+  | "experimental_listProviders"
   | "pathsExist"
   | "pickFolder"
   | "providerCliStatus"
+  | "experimental_resume"
+  | "experimental_retryCleanup"
   | "retryUpdate"
+  | "experimental_suspend"
   | "update";
 
 type ExpectedPluginsKey =
@@ -334,6 +340,8 @@ type ExpectedProvidersKey = "list" | "models";
 type ExpectedStatusKey = "get";
 
 type ExpectedSystemKey =
+  | "machineEnvironment"
+  | "replaceMachineEnvironment"
   | "attention"
   | "cliSkillsStatus"
   | "config"
@@ -341,12 +349,15 @@ type ExpectedSystemKey =
   | "installCliSkills"
   | "reloadConfig"
   | "transcribeVoice"
+  | "uiPreferences"
   | "updateExperiments"
   | "updateGeneralSettings"
   | "updateKeyboardSettings"
   | "providerStates"
   | "usageLimits"
   | "version";
+
+type ExpectedSystemUiPreferencesKey = "list" | "reset" | "set";
 
 type ExpectedThemeKey = "catalog" | "get" | "resolve" | "set";
 
@@ -355,6 +366,7 @@ type ExpectedThreadSectionsKey = "create" | "delete" | "list" | "update";
 type ExpectedThreadsKey =
   | "getPluginMetadata"
   | "updatePluginMetadata"
+  | "context"
   | "archive"
   | "archiveAll"
   | "cancelPlan"
@@ -543,6 +555,9 @@ describe("SDK public type entrypoints", () => {
     expectTypeOf<
       keyof RootBbSdk["system"]
     >().toEqualTypeOf<ExpectedSystemKey>();
+    expectTypeOf<
+      keyof RootBbSdk["system"]["uiPreferences"]
+    >().toEqualTypeOf<ExpectedSystemUiPreferencesKey>();
     expectTypeOf<
       keyof RootBbSdk["terminals"]
     >().toEqualTypeOf<ExpectedTerminalsKey>();

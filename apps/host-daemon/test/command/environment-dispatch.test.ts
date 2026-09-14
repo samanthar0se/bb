@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceError, type HostWorkspace } from "@bb/host-workspace";
 import { dispatchCommand } from "../../src/command-dispatch.js";
@@ -30,9 +31,11 @@ describe("environment command dispatch", () => {
     const result = await dispatchCommand(
       {
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env-unmanaged",
         initiator: null,
         path: sourcePath,
+        setupScriptTimeoutMs: null,
       },
       harness.dispatchOptions(),
     );
@@ -50,6 +53,81 @@ describe("environment command dispatch", () => {
         signal: expect.any(AbortSignal),
       },
     ]);
+  });
+
+  it("runs setup before attaching a provider-owned workspace", async () => {
+    const harness = createHarness({ workspacePath: "/tmp/provider-owned" });
+    const sourcePath = await makeTempDir("bb-dispatch-provider-owned-");
+    const markerPath = `${sourcePath}/setup-marker`;
+    await fs.writeFile(
+      `${sourcePath}/.bb-env-setup.sh`,
+      `printf '%s' \"$SETUP_VALUE\" > '${markerPath}'\n`,
+    );
+    const emittedEvents: EventSinkInput[] = [];
+
+    await dispatchCommand(
+      {
+        type: "environment.attach",
+        contributedEnv: [
+          {
+            name: "SETUP_VALUE",
+            value: "ready",
+            source: { plugin: "fixture" },
+            reason: "test",
+          },
+        ],
+        environmentId: "env-provider-owned",
+        initiator: {
+          threadId: "thr-provider-owned",
+          provisioningId: "tpv-provider-owned",
+        },
+        path: sourcePath,
+        setupScriptTimeoutMs: 10_000,
+      },
+      makeDispatchOptions({
+        runtimeManager: harness.manager,
+        eventSink: {
+          emit: (event) => emittedEvents.push(event),
+          flush: async () => undefined,
+        },
+      }),
+    );
+
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("ready");
+    expect(streamedEntries(emittedEvents)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "setup-started",
+          text: "Running .bb-env-setup.sh",
+        }),
+        expect.objectContaining({ key: "setup-completed" }),
+        expect.objectContaining({ key: "workspace-path" }),
+      ]),
+    );
+  });
+
+  it("fails attachment when the setup script fails", async () => {
+    const harness = createHarness({ workspacePath: "/tmp/setup-failure" });
+    const sourcePath = await makeTempDir("bb-dispatch-setup-failure-");
+    await fs.writeFile(
+      `${sourcePath}/.bb-env-setup.sh`,
+      "printf 'script diagnostic\\n'\nexit 7\n",
+    );
+
+    await expect(
+      dispatchCommand(
+        {
+          type: "environment.attach",
+          contributedEnv: [],
+          environmentId: "env-setup-failure",
+          initiator: null,
+          path: sourcePath,
+          setupScriptTimeoutMs: 10_000,
+        },
+        harness.dispatchOptions(),
+      ),
+    ).rejects.toThrow("failed with exit code 7");
+    expect(harness.provisions).toEqual([]);
   });
 
   it("returns success when cancelling a provision with no in-flight work", async () => {
@@ -95,9 +173,11 @@ describe("environment command dispatch", () => {
     const provision = dispatchCommand(
       {
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env-cancel",
         initiator: null,
         path: "/tmp/cancelled",
+        setupScriptTimeoutMs: null,
       },
       dispatchOptions,
     );
@@ -147,9 +227,11 @@ describe("environment command dispatch", () => {
     const provision = dispatchCommand(
       {
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env-cancel-no-settle",
         initiator: null,
         path: "/tmp/cancelled-no-settle",
+        setupScriptTimeoutMs: null,
       },
       dispatchOptions,
     ).finally(() => {
@@ -181,12 +263,14 @@ describe("environment command dispatch", () => {
     await dispatchCommand(
       {
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env-stream",
         initiator: {
           threadId: "thr-initiator",
           provisioningId: "tpv-initiator",
         },
         path: sourcePath,
+        setupScriptTimeoutMs: null,
       },
       makeDispatchOptions({
         runtimeManager: harness.manager,
@@ -260,12 +344,14 @@ describe("environment command dispatch", () => {
     await dispatchCommand(
       {
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env-batched-progress",
         initiator: {
           threadId: "thr-batched-progress",
           provisioningId: "tpv-batched-progress",
         },
         path: "/tmp/batched-progress",
+        setupScriptTimeoutMs: null,
       },
       makeDispatchOptions({
         runtimeManager: manager,
@@ -317,12 +403,14 @@ describe("environment command dispatch", () => {
       dispatchCommand(
         {
           type: "environment.attach",
+          contributedEnv: [],
           environmentId: "env-failure",
           initiator: {
             threadId: "thr-failure",
             provisioningId: "tpv-failure",
           },
           path: "/tmp/failure",
+          setupScriptTimeoutMs: null,
         },
         makeDispatchOptions({
           runtimeManager: manager,
@@ -355,9 +443,11 @@ describe("environment command dispatch", () => {
     await dispatchCommand(
       {
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env-idempotent",
         initiator: null,
         path: sourcePath,
+        setupScriptTimeoutMs: null,
       },
       harness.dispatchOptions(),
     );
@@ -365,12 +455,14 @@ describe("environment command dispatch", () => {
     const result = await dispatchCommand(
       {
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env-idempotent",
         initiator: {
           threadId: "thr-second",
           provisioningId: "tpv-second",
         },
         path: sourcePath,
+        setupScriptTimeoutMs: null,
       },
       makeDispatchOptions({
         runtimeManager: harness.manager,
@@ -395,4 +487,53 @@ describe("environment command dispatch", () => {
       }),
     ]);
   });
+});
+
+it("cancels setup with contributions even when another attach is waiting", async () => {
+  const sourcePath = await makeTempDir("bb-setup-env-cancel-");
+  const harness = createHarness({ workspacePath: sourcePath });
+  await fs.writeFile(
+    `${sourcePath}/.bb-env-setup.sh`,
+    'printf "%s" "$SETUP_VALUE" > started\nsleep 120\nprintf unsafe > after-cancel\n',
+  );
+  const command = {
+    type: "environment.attach" as const,
+    contributedEnv: [
+      {
+        name: "SETUP_VALUE",
+        value: "configured",
+        source: { plugin: "fixture" },
+        reason: "test",
+      },
+    ],
+    environmentId: "env-setup-cancel",
+    initiator: null,
+    path: sourcePath,
+    setupScriptTimeoutMs: 5000,
+  };
+  const options = harness.dispatchOptions();
+  const first = dispatchCommand(command, options);
+  const second = dispatchCommand(command, options);
+  const settled = Promise.allSettled([first, second]);
+  try {
+    await expect
+      .poll(async () => fs.readFile(`${sourcePath}/started`, "utf8"))
+      .toBe("configured");
+    await dispatchCommand(
+      {
+        type: "environment.attach.cancel",
+        environmentId: command.environmentId,
+      },
+      options,
+    );
+    expect(await settled).toEqual([
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ status: "rejected" }),
+    ]);
+    await expect(fs.stat(`${sourcePath}/after-cancel`)).rejects.toThrow();
+    expect(harness.provisions).toHaveLength(0);
+  } finally {
+    await harness.manager.shutdownAll();
+    await settled;
+  }
 });

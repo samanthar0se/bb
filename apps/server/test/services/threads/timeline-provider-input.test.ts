@@ -28,7 +28,6 @@ function setup(): { db: DbConnection; thread: Thread } {
   migrate(db);
   const host = upsertHost(db, noopNotifier, {
     name: "test-host",
-    type: "persistent",
   });
   const { project } = createProject(db, noopNotifier, {
     name: "test-project",
@@ -169,7 +168,7 @@ describe("timeline pages with provider-recorded input", () => {
       page: { kind: "latest", segmentLimit: 20 },
     });
 
-    expect(response.timelinePage).toEqual({
+    expect(response.timelinePage).toMatchObject({
       kind: "latest",
       segmentLimit: 20,
       returnedSegmentCount: 1,

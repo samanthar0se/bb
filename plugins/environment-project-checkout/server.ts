@@ -28,7 +28,6 @@ export const checkoutInputsSchema = z.object({
   path: z.string().min(1).optional(),
   branch: checkoutBranchSelectionSchema.optional(),
 });
-export type CheckoutInputs = z.infer<typeof checkoutInputsSchema>;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -141,6 +140,7 @@ export default async function checkoutPlugin(bb: BbPluginApi): Promise<void> {
   bb.experimental_environments.register({
     id: PROJECT_CHECKOUT_ENVIRONMENT_PROVIDER_ID,
     displayName: "Project checkout",
+    description: "Work in a project checkout on this machine.",
     icon: "Laptop",
     requires: { projectCheckout: true },
     inputs: checkoutInputsSchema,
@@ -186,7 +186,7 @@ export default async function checkoutPlugin(bb: BbPluginApi): Promise<void> {
       if (!(await context.experimental_claimPath(path))) {
         return {
           status: "failed",
-          failure: "terminal",
+
           message: LIVE_THREAD_MESSAGE,
         };
       }
@@ -200,7 +200,7 @@ export default async function checkoutPlugin(bb: BbPluginApi): Promise<void> {
       ) {
         return {
           status: "failed",
-          failure: "terminal",
+
           message: LIVE_THREAD_MESSAGE,
         };
       }
@@ -225,20 +225,22 @@ export default async function checkoutPlugin(bb: BbPluginApi): Promise<void> {
         if (result.status === "failed") {
           return {
             status: "failed",
-            failure: "terminal",
+
             message: result.message,
           };
         }
         return {
           status: "created",
           path: result.path,
-          ownsPath: false,
+          ownsPath:
+            result.path === context.projectCheckout.path &&
+            context.projectCheckout.experimental_ownsPath === true,
         };
       } catch (error) {
         if (context.signal.aborted) throw error;
         return {
           status: "failed",
-          failure: "transient",
+
           message: errorMessage(error),
         };
       } finally {

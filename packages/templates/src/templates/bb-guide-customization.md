@@ -70,14 +70,14 @@ Server-backed General settings
 
 Settings → General includes app-wide preferences stored server-side so every
 window and restart sees the same value. Keep Awake is instead owned by its
-builtin plugin: use its autosaving page under Extensions → Plugins or run
+builtin plugin: use its autosaving page under Settings → Installed plugins or run
 `bb keep-awake enable` or `bb keep-awake disable`. Choose every host with `bb
 keep-awake hosts all`, or name individual host ids after `bb keep-awake hosts`.
 On macOS it prevents system idle sleep while bb is running; closing the lid or
 choosing Sleep still sleeps the Mac.
 
 Concurrency limit is also owned by its builtin plugin. Its autosaving page
-under Extensions → Plugins leaves the overall limit unlimited by default and
+under Settings → Installed plugins leaves the overall limit unlimited by default and
 uses an automatic per-host limit of one thread per available processor. Use
 `bb concurrency-limit global [unlimited|<limit>]` and `bb
 concurrency-limit host <host-id> [auto|<limit>]`; 0 pauses new work.
@@ -132,9 +132,9 @@ and `null` clears a preference that can be unset.
 
 The default-off `changelogPreview` experiment shows the latest release notes
 as a compact, dismissible card on Settings → Updates.
-The default-on `editMessages` experiment enables editing eligible, accepted
+Message editing is available for eligible, accepted
 root user messages in Codex, Claude Code, and Pi threads, including failed or
-incomplete turns; turn it off to hide the editor. Opening the editor is
+incomplete turns. Opening the editor is
 client-local; submitting stops and settles a running thread, then replaces the
 selected turn and all later conversation history while retaining workspace side
 effects. Grouped multi-message requests are not yet editable.
@@ -154,12 +154,13 @@ The default-off `timelineWindowing` experiment mounts only nearby rows in long
 timelines and large expanded timeline details. Enable it with
 `bb settings experiment timelineWindowing true`.
 
-Thread timeline windows are bounded by event count as well as user-message
-count (`BB_FF_TIMELINE_WINDOW_EVENT_BUDGET`, default 1500), so a long thread
-stops reprojecting its whole history — and blocking the server event loop — on
-every update. A turn still running is cut at the budget too, so a very long
-turn costs the budget per update instead of growing without limit. Older
-activity loads automatically as you scroll toward the top.
+Thread timeline pages select complete conversation groups using
+`BB_FF_TIMELINE_WINDOW_EVENT_BUDGET` (default 1500) as a selection budget.
+Oversized groups paginate their contents with stable summary identities.
+Grouping can load more than the budget to preserve lifecycle and delegation
+context; it is not a hard CPU or memory cap. Older activity loads on scroll.
+A walk keeps its initial history snapshot. Edits invalidate it, and a new live
+snapshot can require loading older pages again.
 
 Server-backed keyboard shortcuts
 
@@ -211,12 +212,59 @@ Voice transcription uses the `BB_TRANSCRIPTION` model, which defaults to
 `bb-app config set BB_TRANSCRIPTION <provider/model>`.
 
 `bb file` supports `--host` for remote machines and `--root` on mutating
-commands to confine access beneath an absolute directory. Use `--json` for
-metadata and machine-readable results.
+commands to confine access beneath an absolute directory. `bb file list` and
+`bb file paths` include dot-prefixed entries; pass `--no-hidden` to skip them.
+Both skip a default set of dependency and cache directories such as
+`node_modules`, `.venv`, `.pnpm-store`, and root-relative `.claude/worktrees`;
+`--exclude <names...>` replaces that set. Entries match basenames at any depth
+or exact root-relative paths using `/` separators. Use
+`--json` for metadata and machine-readable results.
+
+Server-backed sidebar preferences
+
+Sidebar layout lives on the server in a keyed, revisioned registry so every
+window, device, and the CLI share it: organization mode, chronological sort,
+section orders, collapsed rows and sections, navigation entry order and
+visibility, and the navigation and thread-list provider pickers. The sidebar
+waits for them alongside the project list, and an upgrade uploads the old
+browser-stored layout once.
+
+  bb settings ui list [--json]
+  bb settings ui get <key> [--json]
+  bb settings ui set <key> <value> [--json]
+  bb settings ui reset <key> [--json]
+
+`bb settings ui list` prints every key with its value, revision, and a short
+description. `set` takes plain strings for enum and provider keys and JSON for
+lists and `null`; it reads the current revision, writes with it, and retries
+once on a conflict. `reset` writes the default. The SDK offers
+`sdk.system.uiPreferences.list()`, `.set()`, and `.reset()`.
+
+Every thread-list header's actions menu offers New project, New section,
+Organize, and Sort by. Organize selects By project, By machine, or Custom;
+Sort by selects a field, and selecting it again reverses its arrow/direction.
+`sidebar.sortDirection` accepts `ascending`, `descending`, or `default`.
+The default preserves each field's original order (newest first for dates,
+A–Z for titles). For example: `bb settings ui set sidebar.sortDirection ascending`.
+
+Sidebar footer actions
+
+Settings → Appearance → Sidebar footer supports drag ordering and visibility.
+Right-click an action and choose Hide to move it into the More menu. Hidden
+shortcuts remain actionable; hiding an open disclosure closes it. The More menu
+appears only when hidden actions are available and links back to customization.
+`sidebar.footerOrder` and `sidebar.hiddenFooterItems` are string lists. Keys are
+`builtin:settings`, `builtin:report-bug`, or `plugin:<encoded pluginId>/<encoded registrationId>`.
+Preferences survive plugin reloads and temporarily unavailable plugins; new items
+are visible by default. Example:
+
+  bb settings ui set sidebar.hiddenFooterItems '["plugin:provider-usage/usage"]'
+  bb settings ui reset sidebar.hiddenFooterItems
 
 Client-local UI preferences
 
-Some Settings values live only in the current browser/client. The Voice Input
+Some Settings values live only in the current browser/client. Sidebar width
+and open state stay local because they depend on the window size. The Voice Input
 microphone picker stores the selected browser MediaDevices device id in
 localStorage as `bb.voiceInput.audioInputDeviceId`; it does not have a `bb`
 command and does not change the server-side transcription model.

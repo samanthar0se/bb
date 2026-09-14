@@ -182,9 +182,11 @@ function textPromptInput(text: string): TextPromptInput {
 function createEnvironmentProvisionCommand(): EnvironmentProvisionCommand {
   return {
     type: "environment.attach",
+    contributedEnv: [],
     environmentId: "env-router",
     initiator: null,
     path: "/tmp/env-router",
+    setupScriptTimeoutMs: null,
   };
 }
 

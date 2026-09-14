@@ -33,7 +33,6 @@ interface ProjectActionsMenuBaseProps {
 
 interface ProjectActionsMenuProps extends ProjectActionsMenuBaseProps {
   triggerClassName?: string;
-  onOpenChange?: (open: boolean) => void;
 }
 
 interface ProjectActionsContextMenuProps extends ProjectActionsMenuBaseProps {
@@ -51,7 +50,7 @@ function stopProjectActionsMenuClickPropagation(event: MouseEvent) {
   event.stopPropagation();
 }
 
-function ProjectActionsMenuItems({
+export function ProjectActionsMenuItems({
   project,
   surface,
 }: ProjectActionsMenuItemsProps) {
@@ -74,7 +73,6 @@ function ProjectActionsMenuItems({
       >
         Project settings
       </ActionMenuItem>
-      <ActionMenuSeparator surface={surface} />
       <ActionMenuItem
         surface={surface}
         icon="Edit"
@@ -95,6 +93,7 @@ function ProjectActionsMenuItems({
           Add local path
         </ActionMenuItem>
       ) : null}
+      <ActionMenuSeparator surface={surface} />
       <ActionMenuItem
         surface={surface}
         icon="Trash2"
@@ -112,10 +111,9 @@ function ProjectActionsMenuItems({
 export function ProjectActionsMenu({
   project,
   triggerClassName,
-  onOpenChange,
 }: ProjectActionsMenuProps) {
   return (
-    <DropdownMenu onOpenChange={onOpenChange}>
+    <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           type="button"

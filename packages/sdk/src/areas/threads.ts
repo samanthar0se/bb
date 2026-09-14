@@ -11,12 +11,12 @@ import {
   type QueuedMessageWaitHolder,
   type ThreadQueuedMessage,
   type ThreadStatus,
+  validatePluginMetadata,
 } from "@bb/domain";
 import {
   DEFAULT_TURN_RETRY_REASON,
   threadTabsResponseSchema,
 } from "@bb/server-contract";
-import { validatePluginMetadata } from "@bb/domain";
 import type {
   CreateQueuedMessageRequest,
   CreateThreadRequest,
@@ -48,6 +48,7 @@ import type {
   ThreadStoragePathListResponse,
   ThreadTabsResponse,
   ThreadTimelineResponse,
+  ThreadContextResponse,
   ThreadWithIncludesResponse,
   TimelineTurnSummaryDetailsResponse,
   ThreadOpenFile,
@@ -175,6 +176,7 @@ export type ThreadInteractionRespondResult = PendingInteraction;
 export type ThreadInteractionCancelResult = PendingInteraction;
 export type ThreadEventsListResult = ThreadEventRow[];
 export type ThreadEventWaitResult = ThreadEventRow | null;
+export type ThreadContextResult = ThreadContextResponse;
 export type ThreadTimelineResult = ThreadTimelineResponse;
 export type ThreadArchiveResult = ThreadArchiveAllResponse;
 export type ThreadOpenResult = ThreadOpenResponse;
@@ -206,7 +208,8 @@ export type ThreadStorageFilesResult = ThreadStorageFileListResponse;
 export type ThreadStorageLocationResult = ThreadStorageLocationResponse;
 export type ThreadStoragePathsResult = ThreadStoragePathListResponse;
 export type ThreadChildSummaryResult = ThreadChildSummaryResponse;
-export type ThreadDefaultExecutionOptionsResult = ResolvedThreadExecutionOptions | null;
+export type ThreadDefaultExecutionOptionsResult =
+  ResolvedThreadExecutionOptions | null;
 export type ThreadConversationOutlineResult = ThreadConversationOutlineResponse;
 export type ThreadTimelineTurnSummaryDetailsResult =
   TimelineTurnSummaryDetailsResponse;
@@ -287,6 +290,7 @@ export interface ThreadRetryArgs {
 }
 
 export interface ThreadActionArgs {
+  signal?: AbortSignal;
   threadId: string;
 }
 
@@ -596,6 +600,7 @@ export interface ThreadsArea {
   spawn(args: ThreadSpawnArgs): Promise<ThreadSpawnResult>;
   stop(args: ThreadActionArgs): Promise<ThreadStopResult>;
   tabs: ThreadTabsArea;
+  context(args: ThreadStatusArgs): Promise<ThreadContextResult>;
   timeline(args: ThreadTimelineArgs): Promise<ThreadTimelineResult>;
   timelineTurnSummaryDetails(
     args: ThreadTimelineTurnSummaryDetailsArgs,
@@ -858,28 +863,13 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
         ...signalRequestArgs(input.signal),
       ),
     );
-  const getPluginMetadata = (input: ThreadPluginMetadataArgs) =>
+  const archiveAll = async (
+    input: ThreadActionArgs,
+  ): Promise<ThreadArchiveAllResult> =>
     transport.readJson(
-      transport.api.v1.threads[":id"]["plugin-metadata"].$get(
-        { param: { id: input.threadId }, query: { pluginId: input.pluginId } },
-        ...signalRequestArgs(input.signal),
-      ),
-    );
-  const updatePluginMetadata = (input: ThreadPluginMetadataUpdateArgs) =>
-    transport.readJson(
-      transport.api.v1.threads[":id"]["plugin-metadata"].$patch(
-        {
-          param: { id: input.threadId },
-          json: {
-            pluginId: input.pluginId,
-            ...(input.set === undefined
-              ? {}
-              : { set: validatePluginMetadata(input.set) }),
-            ...(input.remove === undefined ? {} : { remove: input.remove }),
-          },
-        },
-        ...signalRequestArgs(input.signal),
-      ),
+      transport.api.v1.threads[":id"]["archive-all"].$post({
+        param: { id: input.threadId },
+      }),
     );
   const events: ThreadEventsArea = {
     async list(input) {
@@ -1086,20 +1076,8 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
     },
   };
   return {
-    async archive(input) {
-      return transport.readJson(
-        transport.api.v1.threads[":id"]["archive-all"].$post({
-          param: { id: input.threadId },
-        }),
-      );
-    },
-    async archiveAll(input) {
-      return transport.readJson(
-        transport.api.v1.threads[":id"]["archive-all"].$post({
-          param: { id: input.threadId },
-        }),
-      );
-    },
+    archive: archiveAll,
+    archiveAll,
     async childSummary(input) {
       return transport.readJson(
         transport.api.v1.threads[":id"]["child-summary"].$get(
@@ -1169,8 +1147,34 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
       );
     },
     get: getThread,
-    getPluginMetadata,
-    updatePluginMetadata,
+    async getPluginMetadata(input) {
+      return transport.readJson(
+        transport.api.v1.threads[":id"]["plugin-metadata"].$get(
+          {
+            param: { id: input.threadId },
+            query: { pluginId: input.pluginId },
+          },
+          ...signalRequestArgs(input.signal),
+        ),
+      );
+    },
+    async updatePluginMetadata(input) {
+      return transport.readJson(
+        transport.api.v1.threads[":id"]["plugin-metadata"].$patch(
+          {
+            param: { id: input.threadId },
+            json: {
+              pluginId: input.pluginId,
+              ...(input.set === undefined
+                ? {}
+                : { set: validatePluginMetadata(input.set) }),
+              ...(input.remove === undefined ? {} : { remove: input.remove }),
+            },
+          },
+          ...signalRequestArgs(input.signal),
+        ),
+      );
+    },
     queue,
     interactions,
     async list(input) {
@@ -1185,14 +1189,14 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
       return transport.readJson(
         transport.api.v1.threads[":id"].read.$post({
           param: { id: input.threadId },
-        }),
+        }, ...signalRequestArgs(input.signal)),
       );
     },
     async markUnread(input) {
       return transport.readJson(
         transport.api.v1.threads[":id"].unread.$post({
           param: { id: input.threadId },
-        }),
+        }, ...signalRequestArgs(input.signal)),
       );
     },
     async output(input) {
@@ -1332,6 +1336,14 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
       return { ok: true };
     },
     tabs,
+    async context(input) {
+      return transport.readJson(
+        transport.api.v1.threads[":id"].context.$get(
+          { param: { id: input.threadId } },
+          ...signalRequestArgs(input.signal),
+        ),
+      );
+    },
     async timeline(input) {
       return transport.readJson(
         transport.api.v1.threads[":id"].timeline.$get(
@@ -1352,6 +1364,9 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
               turnId: input.turnId,
               sourceSeqStart: input.sourceSeqStart,
               sourceSeqEnd: input.sourceSeqEnd,
+              ...(input.beforeCursor === undefined
+                ? {}
+                : { beforeCursor: input.beforeCursor }),
             },
           },
           ...signalRequestArgs(input.signal),

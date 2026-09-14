@@ -13,6 +13,8 @@ import {
   accountPoolConfigSetInputSchema,
   codexLoginPollSchema,
   codexLoginStartSchema,
+  routedThreadStatusListSchema,
+  statusReportSchema,
   statusSchema,
   type AccountSummary,
 } from "./contracts.js";
@@ -217,10 +219,12 @@ async function createFixture(args: {
   await vi.waitFor(async () => {
     const result = await host.harness.behavior.runCli(["status", "--json"]);
     expect(result.exitCode).toBe(0);
-    expect(statusSchema.parse(JSON.parse(result.stdout)).accepting).toBe(true);
+    expect(statusReportSchema.parse(JSON.parse(result.stdout)).accepting).toBe(
+      true,
+    );
   });
   const statusResult = await host.harness.behavior.runCli(["status", "--json"]);
-  const status = statusSchema.parse(JSON.parse(statusResult.stdout));
+  const status = statusReportSchema.parse(JSON.parse(statusResult.stdout));
   const account = status.accounts.find(
     (candidate) => candidate.id === accountMetadata.id,
   );
@@ -416,21 +420,40 @@ describe("Account Pool plugin", () => {
     });
   });
 
-  it.each(["generations", "edits"])(
-    "routes native Codex image %s with pool authentication",
-    async (operation) => {
+  it.each([
+    {
+      path: "images/generations",
+      request: { prompt: "A fox astronaut", images: [] },
+      result: { data: [{ b64_json: "generated-image" }] },
+    },
+    {
+      path: "images/edits",
+      request: { prompt: "A fox astronaut", images: [] },
+      result: { data: [{ b64_json: "generated-image" }] },
+    },
+    {
+      path: "alpha/search",
+      request: {
+        id: "search-1",
+        model: "gpt-5.5",
+        commands: { search_query: [{ q: "bb account pooler" }] },
+      },
+      result: { encrypted_output: "encrypted-search-output" },
+    },
+  ])(
+    "routes native Codex $path with pool authentication",
+    async ({ path, request, result }) => {
       const requests: Request[] = [];
-      const image = { data: [{ b64_json: "generated-image" }] };
       const fixture = await createOAuthRequestFixture(
         "codex",
         async (input, init) => {
           requests.push(new Request(input, init));
-          return Response.json(image);
+          return Response.json(result);
         },
         Date.now,
       );
-      const route = `/v1/images/${operation}`;
-      const body = JSON.stringify({ prompt: "A fox astronaut", images: [] });
+      const route = `/v1/${path}`;
+      const body = JSON.stringify(request);
       const denied = await fixture.host.harness.behavior.fetchHttp(
         "POST",
         route,
@@ -451,11 +474,9 @@ describe("Account Pool plugin", () => {
         },
       );
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual(image);
+      expect(await response.json()).toEqual(result);
       expect(requests).toHaveLength(1);
-      expect(requests[0]?.url).toBe(
-        `https://upstream.example/images/${operation}`,
-      );
+      expect(requests[0]?.url).toBe(`https://upstream.example/${path}`);
       expect(requests[0]?.headers.get("authorization")).toBe(
         "Bearer oauth-old",
       );
@@ -1020,7 +1041,7 @@ describe("Account Pool plugin", () => {
       "status",
       "--json",
     ]);
-    const status = statusSchema.parse(JSON.parse(statusResult.stdout));
+    const status = statusReportSchema.parse(JSON.parse(statusResult.stdout));
     expect(status.accepting).toBe(true);
     expect(status.hosts).toEqual([]);
     expect(
@@ -1130,7 +1151,7 @@ describe("Account Pool plugin", () => {
         ])
       ).exitCode,
     ).toBe(0);
-    const publicStatus = statusSchema.parse(
+    const publicStatus = statusReportSchema.parse(
       JSON.parse(
         (await fixture.host.harness.behavior.runCli(["status", "--json"]))
           .stdout,
@@ -1495,20 +1516,17 @@ describe("Account Pool plugin", () => {
         name: "ANTHROPIC_BASE_URL",
         value: { serverPath: "/api/v1/plugins/account-pool/http" },
         reason: "Routed through the Account Pooler hub",
-        secret: false,
       },
       {
         name: "ANTHROPIC_AUTH_TOKEN",
         value: fixture.key,
         reason: "Account Pooler hub token for this machine",
-        secret: true,
       },
       {
         name: "ENABLE_TOOL_SEARCH",
         value: "true",
         reason:
           "Claude Code turns tool search off behind a custom base URL; the hub forwards tool_reference blocks",
-        secret: false,
       },
     ]);
     await expect(
@@ -1675,10 +1693,10 @@ describe("Account Pool plugin", () => {
         ],
       }),
     );
-    const status = statusSchema.parse(
-      await fixture.host.harness.behavior.callRpc("status.get", null),
+    const routedThreads = routedThreadStatusListSchema.parse(
+      await fixture.host.harness.behavior.callRpc("status.routedThreads", null),
     );
-    expect(status.routedThreadsWithoutLocalLogin).toEqual([
+    expect(routedThreads).toEqual([
       {
         threadId: "thread-one",
         hostId: "host-one",
@@ -1763,10 +1781,10 @@ describe("Account Pool plugin", () => {
         },
       ],
     }));
-    const status = statusSchema.parse(
-      await fixture.host.harness.behavior.callRpc("status.get", null),
+    const routedThreads = routedThreadStatusListSchema.parse(
+      await fixture.host.harness.behavior.callRpc("status.routedThreads", null),
     );
-    expect(status.routedThreadsWithoutLocalLogin).toEqual([
+    expect(routedThreads).toEqual([
       {
         threadId: "thread-one",
         hostId: "host-one",

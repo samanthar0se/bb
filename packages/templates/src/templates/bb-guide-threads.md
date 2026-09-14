@@ -112,7 +112,7 @@ Forking:
   provider session lives on its original machine. Omit --prompt to create an
   idle fork.
 
-Editing a sent message (requires the default-on `editMessages` experiment):
+Editing a sent message:
 
   bb thread edit-message <id> --message "Replacement text"
     --self                              Target the current thread (BB_THREAD_ID)
@@ -170,6 +170,7 @@ Sections:
 
 Inspecting:
 
+  bb thread context [id]                   Show recorded context usage and available breakdown (--self, --json)
   bb thread show [id]                      Show thread details and pull request status
     --self                                 Target current thread
     --work-status                          Include git working-tree status
@@ -189,7 +190,9 @@ Inspecting:
     --all                                  Print the whole thread, paging through every entry
 
   Human formats end with a notice when older history was omitted; --json warns
-  on stderr when more events exist beyond the printed page.
+  on stderr when more events exist beyond the printed page. Human-format --all
+  walks a consistent history snapshot and joins paginated group contents.
+  Appends stay outside that walk; rerun the command if a history edit invalidates it.
 
   bb thread output [id]                    Get the final output of a thread
     --self                                 Target current thread
@@ -281,6 +284,10 @@ Ownership:
     --model <model>                        Set the sticky model for the next and later turns
     --reasoning-level <level>              Set the sticky reasoning level (provider-dependent)
     --visibility <visibility>              Set visible or hidden
+
+  Clearing a parent inherits the former parent's section unless --section or
+  --clear-section is also supplied. Children released by environment archiving
+  also inherit their former parent's section.
 
   Model and reasoning updates stay within the thread's current provider. BB
   validates them against that provider's current model catalog, applies them on
@@ -391,3 +398,10 @@ Lifecycle:
 
 Read-only commands require a thread ID or --self where supported.
 Mutating thread lifecycle and messaging commands require an explicit ID or --self.
+
+`bb thread context [id]` reads the latest stored context measurement without
+starting a provider request. Use `--self` for the current thread and `--json` for
+`{ usage: ... }` (`null` when unavailable). Claude Code refreshes the estimated
+breakdown after turns and compaction when its SDK supports context inspection.
+A later aggregate-only measurement replaces any older breakdown. Other providers
+continue to expose their available totals.

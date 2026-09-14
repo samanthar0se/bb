@@ -1,5 +1,13 @@
 import { collectOptionalFieldPaths } from "@bb/test-helpers";
-import { threadScope, turnScope, type JsonObject } from "@bb/domain";
+import {
+  TERMINAL_COLS_MAX,
+  TERMINAL_DATA_MAX_BASE64_LENGTH,
+  TERMINAL_DATA_MAX_BYTES,
+  TERMINAL_ROWS_MAX,
+  threadScope,
+  turnScope,
+  type JsonObject,
+} from "@bb/domain";
 import { describe, expect, it } from "vitest";
 import * as contract from "../src/index.js";
 import {
@@ -7,10 +15,6 @@ import {
   HOST_DAEMON_PROTOCOL_VERSION,
   HOST_DAEMON_ONLINE_RPC_COMMAND_TYPES,
   HOST_DAEMON_SETTLED_COMMAND_TYPES,
-  TERMINAL_COLS_MAX,
-  TERMINAL_DATA_MAX_BASE64_LENGTH,
-  TERMINAL_DATA_MAX_BYTES,
-  TERMINAL_ROWS_MAX,
   createHostDaemonClient,
   hostDaemonEnrollRequestSchema,
   hostDaemonEnrollResponseSchema,
@@ -208,6 +212,27 @@ const ONLINE_RPC_RESPONSE_RESULT_FIXTURES: OnlineRpcResponseResultFixtures = {
     expiresAt: 1700000000000,
   },
   "desktop.browser.release_control": { ok: true },
+  "desktop.browser.list_import_sources": {
+    sources: [
+      {
+        id: "chrome",
+        name: "Google Chrome",
+        profiles: [{ directory: "Default", name: "Person 1", cookieCount: 12 }],
+      },
+      {
+        id: "safari",
+        name: "Safari",
+        profiles: [],
+        unavailable: "notInstalled",
+      },
+    ],
+  },
+  "desktop.browser.import_cookies": {
+    ok: true,
+    imported: 12,
+    skipped: 1,
+    skippedDomains: ["example.com"],
+  },
   "plugin.host.call": { output: { ok: true } },
   "plugin.host.cancel": { cancelled: true },
   "plugin.host.dispose": { disposed: true },
@@ -973,13 +998,12 @@ const CONTRIBUTED_ENV = [
     value: { serverPath: "/plugins/auth-proxy/api" },
     source: { plugin: "auth-proxy" },
     reason: "Route provider traffic through the plugin",
-    secret: true,
   },
 ] as const;
 
 describe("host-daemon command schemas", () => {
   it("uses the current host-daemon protocol version", () => {
-    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(195);
+    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(207);
     expect(HOST_ARTIFACT_MAX_BYTES).toBe(256 * 1024 * 1024);
   });
 
@@ -1084,11 +1108,9 @@ describe("host-daemon command schemas", () => {
       hostDaemonEnrollRequestSchema.parse({
         hostId: "host_123",
         hostName: "test-host",
-        hostType: "persistent",
       }),
     ).toMatchObject({
       hostId: "host_123",
-      hostType: "persistent",
     });
 
     expect(
@@ -1117,6 +1139,7 @@ describe("host-daemon command schemas", () => {
     expect(() =>
       hostDaemonCommandSchema.parse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: {
           threadId: "thr_123",
@@ -1134,6 +1157,7 @@ describe("host-daemon command schemas", () => {
     expect(() =>
       hostDaemonCommandSchema.parse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_personal",
         initiator: null,
         workspaceProvisionType: "personal",
@@ -1144,12 +1168,15 @@ describe("host-daemon command schemas", () => {
     expect(
       hostDaemonCommandSchema.parse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
         path: "/tmp/project",
+        setupScriptTimeoutMs: null,
       }),
     ).toMatchObject({
       type: "environment.attach",
+      contributedEnv: [],
       path: "/tmp/project",
     });
 
@@ -1227,11 +1254,17 @@ describe("host-daemon command schemas", () => {
         type: "host.list_files",
         path: "/tmp/workspace",
         limit: 1000,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
       }),
     ).toMatchObject({
       type: "host.list_files",
       path: "/tmp/workspace",
       limit: 1000,
+      includeHidden: true,
+      respectGitIgnore: false,
+      excludeNames: [],
     });
 
     expect(
@@ -1239,6 +1272,9 @@ describe("host-daemon command schemas", () => {
         type: "host.list_paths",
         path: "/tmp/workspace",
         limit: 1000,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
         includeFiles: true,
         includeDirectories: true,
       }),
@@ -1246,6 +1282,9 @@ describe("host-daemon command schemas", () => {
       type: "host.list_paths",
       path: "/tmp/workspace",
       limit: 1000,
+      includeHidden: true,
+      respectGitIgnore: false,
+      excludeNames: [],
       includeFiles: true,
       includeDirectories: true,
     });
@@ -1469,11 +1508,17 @@ describe("host-daemon command schemas", () => {
         type: "host.list_files",
         path: "/tmp/bb-data/thread-storage/thread-123",
         limit: 100,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
       }),
     ).toMatchObject({
       type: "host.list_files",
       path: "/tmp/bb-data/thread-storage/thread-123",
       limit: 100,
+      includeHidden: true,
+      respectGitIgnore: false,
+      excludeNames: [],
     });
 
     expect(
@@ -1540,11 +1585,21 @@ describe("host-daemon command schemas", () => {
 
   it("rejects online-RPC-only read commands from the settled command schema", () => {
     const onlineReadCommands = [
-      { type: "host.list_files", path: "/tmp/workspace", limit: 100 },
+      {
+        type: "host.list_files",
+        path: "/tmp/workspace",
+        limit: 100,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
+      },
       {
         type: "host.list_paths",
         path: "/tmp/workspace",
         limit: 100,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
         includeFiles: true,
         includeDirectories: true,
       },
@@ -1623,6 +1678,7 @@ describe("host-daemon command schemas", () => {
     expect(() =>
       hostDaemonCommandSchema.parse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
         workspaceProvisionType: "managed-worktree",
@@ -1634,6 +1690,7 @@ describe("host-daemon command schemas", () => {
     expect(() =>
       hostDaemonCommandSchema.parse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
       }),
@@ -1642,6 +1699,7 @@ describe("host-daemon command schemas", () => {
     expect(() =>
       hostDaemonCommandSchema.parse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
         path: "/tmp/project",
@@ -1652,6 +1710,7 @@ describe("host-daemon command schemas", () => {
     expect(() =>
       hostDaemonCommandSchema.parse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
         path: "/tmp/project",
@@ -2545,6 +2604,7 @@ describe("host-daemon command schemas", () => {
     expect(() =>
       hostDaemonCommandSchema.parse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: {
           threadId: "thr_123",
@@ -2574,6 +2634,7 @@ describe("host-daemon command schemas", () => {
     expect(
       hostDaemonCommandSchema.safeParse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
         path: "/tmp/project",
@@ -2584,6 +2645,7 @@ describe("host-daemon command schemas", () => {
     expect(
       hostDaemonCommandSchema.safeParse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
         path: "/tmp/project",
@@ -2598,6 +2660,7 @@ describe("host-daemon command schemas", () => {
     expect(
       hostDaemonCommandSchema.safeParse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
         workspaceProvisionType: "managed-worktree",
@@ -2612,6 +2675,7 @@ describe("host-daemon command schemas", () => {
     expect(
       hostDaemonCommandSchema.safeParse({
         type: "environment.attach",
+        contributedEnv: [],
         environmentId: "env_123",
         initiator: null,
         workspaceProvisionType: "managed-worktree",
@@ -2660,6 +2724,51 @@ describe("host-daemon command schemas", () => {
     ).toBe(false);
   });
 
+  it("requires file list commands to state their entry filters", () => {
+    const listFiles = {
+      type: "host.list_files",
+      path: "/tmp/workspace",
+      limit: 100,
+      includeHidden: true,
+      respectGitIgnore: false,
+      excludeNames: ["node_modules"],
+    };
+    const listPaths = {
+      type: "host.list_paths",
+      path: "/tmp/workspace",
+      limit: 100,
+      includeFiles: true,
+      includeDirectories: true,
+      includeHidden: true,
+      respectGitIgnore: false,
+      excludeNames: ["node_modules"],
+    };
+    const parses = (command: Record<string, unknown>) =>
+      hostDaemonOnlineRpcCommandSchema.safeParse(command).success;
+
+    expect(parses(listFiles)).toBe(true);
+    expect(parses(listPaths)).toBe(true);
+    for (const command of [listFiles, listPaths]) {
+      const { includeHidden: _hidden, ...withoutHidden } = command;
+      const { respectGitIgnore: _ignore, ...withoutIgnorePolicy } = command;
+      const { excludeNames: _names, ...withoutNames } = command;
+      expect(parses(withoutHidden)).toBe(false);
+      expect(parses(withoutIgnorePolicy)).toBe(false);
+      expect(parses({ ...command, respectGitIgnore: true })).toBe(true);
+      expect(parses(withoutNames)).toBe(false);
+      expect(parses({ ...command, excludeNames: [""] })).toBe(false);
+      expect(
+        parses({
+          ...command,
+          excludeNames: Array.from(
+            { length: contract.FILE_LIST_EXCLUDE_NAMES_MAX + 1 },
+            (_, index) => `name-${index}`,
+          ),
+        }),
+      ).toBe(false);
+    }
+  });
+
   it("bounds file list command queries and limits", () => {
     const longQuery = "a".repeat(contract.FILE_LIST_QUERY_MAX_LENGTH + 1);
 
@@ -2669,6 +2778,9 @@ describe("host-daemon command schemas", () => {
         path: "/tmp/bb-data/thread-storage/thread-123",
         query: longQuery,
         limit: 100,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
       }),
     ).toThrow();
 
@@ -2677,6 +2789,9 @@ describe("host-daemon command schemas", () => {
         type: "host.list_files",
         path: "/tmp/bb-data/thread-storage/thread-123",
         limit: contract.FILE_LIST_LIMIT_MAX + 1,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
       }),
     ).toThrow();
 
@@ -2686,6 +2801,9 @@ describe("host-daemon command schemas", () => {
         path: "/tmp/workspace",
         query: longQuery,
         limit: 100,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
       }),
     ).toThrow();
 
@@ -2694,6 +2812,9 @@ describe("host-daemon command schemas", () => {
         type: "host.list_files",
         path: "/tmp/workspace",
         limit: contract.FILE_LIST_LIMIT_MAX + 1,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
       }),
     ).toThrow();
 
@@ -2703,6 +2824,9 @@ describe("host-daemon command schemas", () => {
         path: "/tmp/workspace",
         query: longQuery,
         limit: 100,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
         includeFiles: true,
         includeDirectories: true,
       }),
@@ -2713,6 +2837,9 @@ describe("host-daemon command schemas", () => {
         type: "host.list_paths",
         path: "/tmp/workspace",
         limit: contract.FILE_LIST_LIMIT_MAX + 1,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
         includeFiles: true,
         includeDirectories: true,
       }),
@@ -2723,6 +2850,9 @@ describe("host-daemon command schemas", () => {
         type: "host.list_paths",
         path: "/tmp/workspace",
         limit: 100,
+        includeHidden: true,
+        respectGitIgnore: false,
+        excludeNames: [],
         includeFiles: false,
         includeDirectories: false,
       }),
@@ -2936,7 +3066,7 @@ describe("host-daemon session schemas", () => {
       hostDaemonEnrollRequestSchema.safeParse({
         hostId: "host_123",
         hostName: "test-host",
-        hostType: "ephemeral",
+        hostType: "persistent",
       }).success,
     ).toBe(false);
     expect(
@@ -2944,7 +3074,7 @@ describe("host-daemon session schemas", () => {
         hostId: "host_123",
         instanceId: "instance_1",
         hostName: "test-host",
-        hostType: "ephemeral",
+        hostType: "persistent",
         hasMachineCredential: true,
         platform: "linux",
         dataDir: "/tmp/bb-data",
@@ -2960,7 +3090,6 @@ describe("host-daemon session schemas", () => {
       hostDaemonSessionOpenRequestSchema.parse({
         hostId: "host_123",
         instanceId: "instance_1",
-        hostType: "persistent",
         hostName: "Michael's MacBook",
         hasMachineCredential: true,
         platform: "darwin",
@@ -2975,7 +3104,6 @@ describe("host-daemon session schemas", () => {
       }),
     ).toMatchObject({
       hostId: "host_123",
-      hostType: "persistent",
       hasMachineCredential: true,
       loadedEnvironments: [],
     });
@@ -2985,7 +3113,6 @@ describe("host-daemon session schemas", () => {
         hostId: "host_123",
         instanceId: "instance_1",
         hostName: "Michael's MacBook",
-        hostType: "persistent",
         hasMachineCredential: false,
         platform: "darwin",
         dataDir: "/tmp/bb-data",
@@ -3011,7 +3138,6 @@ describe("host-daemon session schemas", () => {
         hostId: "host_123",
         instanceId: "instance_1",
         hostName: "Michael's MacBook",
-        hostType: "persistent",
         hasMachineCredential: true,
         platform: "darwin",
         dataDir: "/tmp/bb-data",
@@ -3030,7 +3156,6 @@ describe("host-daemon session schemas", () => {
         hostId: "host_123",
         instanceId: "instance_1",
         hostName: "Michael's MacBook",
-        hostType: "persistent",
         hasMachineCredential: true,
         platform: "darwin",
         dataDir: "/tmp/bb-data",
@@ -3047,7 +3172,6 @@ describe("host-daemon session schemas", () => {
         hostId: "host_123",
         instanceId: "instance_1",
         hostName: "Michael's MacBook",
-        hostType: "persistent",
         hasMachineCredential: true,
         platform: "darwin",
         dataDir: "/tmp/bb-data",
@@ -3060,6 +3184,7 @@ describe("host-daemon session schemas", () => {
     expect(
       hostDaemonSessionOpenResponseSchema.parse({
         sessionId: "session_123",
+        machineEnvironment: { revision: 0, entries: [] },
         heartbeatIntervalMs: 5_000,
         leaseTimeoutMs: 30_000,
         connectShares: {
@@ -3084,6 +3209,7 @@ describe("host-daemon session schemas", () => {
     expect(
       hostDaemonSessionOpenResponseSchema.parse({
         sessionId: "session_default_shares",
+        machineEnvironment: { revision: 0, entries: [] },
         heartbeatIntervalMs: 5_000,
         leaseTimeoutMs: 30_000,
       }).connectShares,
@@ -3739,6 +3865,7 @@ describe("host-daemon session schemas", () => {
     expect(
       hostDaemonServerWsMessageSchema.safeParse({
         type: "terminal.open",
+        contributedEnv: [],
         requestId: "request-1",
         terminalId: "term_123",
         threadId: "thr_123",

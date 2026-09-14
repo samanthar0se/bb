@@ -38,6 +38,7 @@ export default async function worktreePlugin(bb: BbPluginApi): Promise<void> {
   bb.experimental_environments.register({
     id: GIT_WORKTREE_ENVIRONMENT_PROVIDER_ID,
     displayName: "Worktree",
+    description: "Create an isolated Git worktree for your changes.",
     icon: "FolderGit",
     requires: { gitCheckout: true },
     inputs: worktreeInputsSchema,
@@ -59,14 +60,13 @@ export default async function worktreePlugin(bb: BbPluginApi): Promise<void> {
               : context.suggestedBranchName,
             baseBranch: context.inputs.branch,
             branchMode: context.rebuild ? "reuse-existing" : "reset",
-            timeoutMs: CREATE_TIMEOUT_MS,
           },
           { hostId, signal: context.signal, timeoutMs: CREATE_TIMEOUT_MS },
         );
         if (result.status === "failed") {
           return {
             status: "failed",
-            failure: "terminal",
+
             message: result.message,
           };
         }
@@ -82,7 +82,7 @@ export default async function worktreePlugin(bb: BbPluginApi): Promise<void> {
         if (context.signal.aborted) throw error;
         return {
           status: "failed",
-          failure: "transient",
+
           message: errorMessage(error),
         };
       } finally {
@@ -102,7 +102,6 @@ export default async function worktreePlugin(bb: BbPluginApi): Promise<void> {
             operationId,
             pathKey: context.pathKey,
             path: context.path,
-            timeoutMs: REMOVE_TIMEOUT_MS,
           },
           {
             hostId: context.hostId,

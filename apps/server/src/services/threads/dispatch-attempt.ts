@@ -1,11 +1,14 @@
+import { requestQueuedMachineReadiness } from "./queued-message-dispatch.js";
+import {
+  cancelPreparingMachinePause,
+  isMachineWaitingForExecution,
+} from "../machines/lifecycle.js";
 import {
   deleteClaimedQueuedThreadMessageBatchInTransaction,
   getEnvironment,
   getThread,
-  getThreadPendingStartContext,
   isThreadQueueAutoSendPaused,
   listRunningThreads,
-  setThreadPendingStartContext,
   type ClaimedQueuedThreadMessageRow,
   type RunningThreadRow,
 } from "@bb/db";
@@ -44,6 +47,8 @@ import {
   type DispatchAttemptKind,
 } from "./dispatch-hooks.js";
 import {
+  createQueuedMessageAutoSendPausedError,
+  createQueuedMessageClaimLostError,
   recordQueuedMessageWait,
   settleQueueRowDispatched,
   type QueuedDispatchMessage,
@@ -59,8 +64,11 @@ import {
 import {
   threadForkDescriptorSchema,
   threadProvisionEnvironmentIntentSchema,
-} from "./thread-provisioning-context.js";
-import { getActiveThreadProvisionContext } from "./thread-provisioning-active-context.js";
+} from "./thread-startup-store.js";
+import {
+  readThreadProvisionContext,
+  readThreadStartupContextOfKind,
+} from "./thread-startup-store.js";
 import {
   buildThreadStatusChangeMetadata,
   toThreadResponseFromThread,
@@ -75,18 +83,8 @@ import {
   type SendThreadMessageTransactionPreflight,
 } from "./thread-send.js";
 import type { TurnRequestRetryMarker } from "./thread-events.js";
-import { restoreFailedProviderLaunchRequest } from "../environments/provider-orchestration.js";
+import { restoreInterruptedThreadStartupRequest } from "./thread-provisioning.js";
 
-/**
- * The half of a never-started thread's first turn that the message itself does
- * not carry: where the thread will run and how it will be established.
- *
- * Persisted on the thread (`threads.pending_start_context`) rather than
- * recomputed, because the live provisioning context is in-memory only and
- * requires the thread to be `starting` — a `pending` thread's first message can
- * wait for a week and across a restart, so an in-memory context would not survive
- * the wait.
- */
 export const pendingThreadStartContextSchema = z.object({
   environmentIntent: threadProvisionEnvironmentIntentSchema,
   fork: threadForkDescriptorSchema.nullable(),
@@ -103,9 +101,12 @@ export function readPendingThreadStartContext(
   deps: Pick<LoggedPendingInteractionWorkSessionDeps, "db">,
   threadId: string,
 ): PendingThreadStartContext | null {
-  const stored = getThreadPendingStartContext(deps.db, threadId);
-  if (stored === null) return null;
-  return pendingThreadStartContextSchema.parse(JSON.parse(stored));
+  return readThreadStartupContextOfKind(
+    deps.db,
+    threadId,
+    "pending",
+    pendingThreadStartContextSchema,
+  );
 }
 
 export function hostIdForEnvironmentIntent(
@@ -115,7 +116,7 @@ export function hostIdForEnvironmentIntent(
   if (intent.type === "reuse") {
     return getEnvironment(deps.db, intent.environmentId)?.hostId ?? null;
   }
-  return intent.machine.hostId;
+  return intent.machine.type === "existing" ? intent.machine.hostId : null;
 }
 
 function toPluginEnvironmentIntent(
@@ -139,7 +140,7 @@ function intendedThreadIntent(
   threadId: string,
 ): PendingThreadStartContext["environmentIntent"] | null {
   return (
-    getActiveThreadProvisionContext(threadId)?.request.environmentIntent ??
+    readThreadProvisionContext(deps.db, threadId)?.request.environmentIntent ??
     readPendingThreadStartContext(deps, threadId)?.environmentIntent ??
     null
   );
@@ -292,7 +293,14 @@ async function runDispatchAttempt(
   reattempted: boolean,
 ): Promise<DispatchAttemptOutcome> {
   const { payload, thread } = args;
-  ensureThreadIsWritable(thread);
+  const initialHost = dispatchEnvironmentAndHost(
+    deps,
+    thread.environmentId,
+  ).host;
+  ensureThreadIsWritable(
+    thread,
+    initialHost !== null && isMachineWaitingForExecution(deps, initialHost.id),
+  );
   if (args.trigger === "user" && args.source.kind === "inline") {
     // Reject what can never deliver while the sender is still listening; a
     // drain has nobody to tell, and its rows were validated when they were queued.
@@ -309,20 +317,21 @@ async function runDispatchAttempt(
     targetThread: thread,
   });
 
-  const failedProviderLaunch =
-    thread.status === "error" && thread.environmentId === null
-      ? await restoreFailedProviderLaunchRequest(deps, thread.id)
+  const interruptedStartupRequest =
+    (thread.status === "error" || thread.status === "idle") &&
+    thread.environmentId === null
+      ? await restoreInterruptedThreadStartupRequest(deps, thread.id)
       : null;
   const firstDispatch =
-    thread.status === "pending" || failedProviderLaunch !== null;
+    thread.status === "pending" || interruptedStartupRequest !== null;
   const retryStartContext: PendingThreadStartContext | null =
-    failedProviderLaunch === null
+    interruptedStartupRequest === null
       ? null
       : {
-          environmentIntent: failedProviderLaunch.environmentIntent,
-          fork: failedProviderLaunch.fork,
+          environmentIntent: interruptedStartupRequest.environmentIntent,
+          fork: interruptedStartupRequest.fork,
           startedOnBehalfOf: args.startedOnBehalfOf,
-          titleProvided: failedProviderLaunch.titleProvided,
+          titleProvided: interruptedStartupRequest.titleProvided,
         };
   const claimed = args.source.kind === "drain" ? args.source.claimed : null;
   const sendNow = args.source.kind === "drain" && args.source.sendNow;
@@ -371,6 +380,21 @@ async function runDispatchAttempt(
     return waitOn({ kind: "time" }, sendAt);
   }
 
+  const { environment: dispatchEnvironment, host: dispatchHost } =
+    dispatchEnvironmentAndHost(deps, thread.environmentId);
+  if (
+    dispatchHost !== null &&
+    isMachineWaitingForExecution(deps, dispatchHost.id)
+  ) {
+    cancelPreparingMachinePause(deps, dispatchHost.id);
+    const outcome = waitOn(
+      { kind: "host-offline", hostName: dispatchHost.name },
+      null,
+    );
+    requestQueuedMachineReadiness(deps, dispatchHost.id);
+    return outcome;
+  }
+
   if (thread.status === "active" && attempt === "start-turn") {
     if (payload.mode === "start") {
       // `start` asks for a FRESH turn specifically, so a running one is a
@@ -384,8 +408,6 @@ async function runDispatchAttempt(
     return waitOn({ kind: "thread-busy" }, null);
   }
 
-  const { environment: dispatchEnvironment, host: dispatchHost } =
-    dispatchEnvironmentAndHost(deps, thread.environmentId);
   if (
     dispatchEnvironment !== null &&
     goneThreadEnvironmentDetails(dispatchEnvironment) === null &&
@@ -606,21 +628,13 @@ function consumeClaimedRows(
 ): SendThreadMessageTransactionPreflight {
   return ({ tx }) => {
     if (respectManualStopPause && isThreadQueueAutoSendPaused(tx, threadId)) {
-      throw new ApiError(
-        409,
-        "queued_message_auto_send_paused",
-        "Queued message auto-send was paused by a manual stop",
-      );
+      throw createQueuedMessageAutoSendPausedError();
     }
     const consumed = deleteClaimedQueuedThreadMessageBatchInTransaction(tx, {
       queuedMessages: claimed,
     });
     if (!consumed) {
-      throw new ApiError(
-        409,
-        "queued_message_claim_lost",
-        "Queued message claim expired before it could be sent",
-      );
+      throw createQueuedMessageClaimLostError();
     }
   };
 }
@@ -634,15 +648,8 @@ interface AdmitPendingThreadArgs {
   thread: Thread;
 }
 
-/**
- * What a committed admission hands to the launch half: everything already
- * resolved, so launching cannot fail its way back into `pending`.
- */
 interface PendingThreadAdmission {
   claimedRow: ClaimedQueuedThreadMessageRow | null;
-  execution: Awaited<ReturnType<typeof buildExecutionOptions>>;
-  input: PromptInput[];
-  startContext: PendingThreadStartContext;
   startingThread: Thread;
 }
 
@@ -693,7 +700,7 @@ async function admitPendingThread(
     threadId: args.thread.id,
   });
   const claimedRow = args.claimed?.[0] ?? null;
-  let startingThread: Thread | null;
+  let startingThread: Thread;
   try {
     startingThread = deps.db.transaction(
       (tx) => {
@@ -715,11 +722,21 @@ async function admitPendingThread(
         if (!prepared.applied) {
           throw new PendingThreadAdmissionLost();
         }
-        setThreadPendingStartContext(tx, {
-          threadId: args.thread.id,
-          pendingStartContext: null,
+        const starting = getThread(tx, args.thread.id);
+        if (starting === null) throw new PendingThreadAdmissionLost();
+        requestThreadProvision(deps, {
+          thread: starting,
+          environmentIntent: startContext.environmentIntent,
+          execution,
+          fork: startContext.fork,
+          input: args.payload.input,
+          ...(startContext.providerInput === undefined
+            ? {}
+            : { providerInput: startContext.providerInput }),
+          startedOnBehalfOf: startContext.startedOnBehalfOf,
+          titleProvided: startContext.titleProvided,
         });
-        return getThread(tx, args.thread.id);
+        return starting;
       },
       { behavior: "immediate" },
     );
@@ -735,9 +752,6 @@ async function admitPendingThread(
     );
     return null;
   }
-  if (!startingThread) {
-    return null;
-  }
   deps.hub.notifyThread(
     startingThread.id,
     ["status-changed"],
@@ -745,41 +759,19 @@ async function admitPendingThread(
   );
   return {
     claimedRow,
-    execution,
-    input: args.payload.input,
-    startContext,
     startingThread,
   };
 }
 
-/**
- * The launching half: the existing provisioning machinery takes over with the
- * message riding the cold-start command, exactly as creation has always done
- * it. Deliberately outside the evaluation lock — provisioning can take as long
- * as a clone, and holding the lock across it would stall every other dispatch
- * in the server.
- */
 async function launchAdmittedThread(
   deps: LoggedPendingInteractionWorkSessionDeps,
   admission: PendingThreadAdmission,
 ): Promise<void> {
-  const { claimedRow, startContext, startingThread } = admission;
-  const context = requestThreadProvision(deps, {
-    thread: startingThread,
-    environmentIntent: startContext.environmentIntent,
-    execution: admission.execution,
-    fork: startContext.fork,
-    input: admission.input,
-    ...(startContext.providerInput !== undefined
-      ? { providerInput: startContext.providerInput }
-      : {}),
-    startedOnBehalfOf: startContext.startedOnBehalfOf,
-    titleProvided: startContext.titleProvided,
-  });
+  const { claimedRow, startingThread } = admission;
   if (claimedRow !== null) {
     settleQueueRowDispatched({ row: claimedRow });
   }
-  scheduleThreadProvisioningAdvance(deps, context, startingThread.id);
+  scheduleThreadProvisioningAdvance(deps, startingThread.id);
 }
 
 /**

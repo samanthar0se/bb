@@ -54,10 +54,12 @@ import {
 import type { PickerOption } from "@/components/pickers/OptionPicker";
 import { selectWorkspaceChangedFilesSection } from "@/components/workspace/workspace-change-summary";
 import { StoryCard, StoryRow } from "../../../.ladle/story-card";
+import { ModelPickerStoryQueryProvider } from "../../../.ladle/model-picker-query-provider";
 import { DialogStage } from "../../../.ladle/story-dialog-stage";
 import {
   makeEnvironment,
   makeExecutionControlsProps,
+  useInteractiveExecutionControls,
   STORY_CLAUDE_CODE_MORE_MODELS,
   STORY_CLAUDE_CODE_MODELS,
   STORY_CLAUDE_REASONING,
@@ -208,6 +210,7 @@ function makeEnvironmentSummary({
     environmentName: environment.name,
     hasMultipleMachines,
     hostName: machineName ?? null,
+    hostType: "persistent",
     isProjectless: projectName === undefined,
   });
   const checkoutDisplay =
@@ -825,7 +828,8 @@ function Row({
         permission={permission}
         activePromptMode={activePromptMode}
         promptActions={promptActions}
-        readOnly={readOnly}
+        executionReadOnly={readOnly}
+        permissionReadOnly={readOnly}
         typeahead={typeaheadBase}
         collapseResetKey={collapseResetKey}
       />
@@ -848,6 +852,15 @@ function StackedCardsWithPillsRow() {
   );
 }
 
+function InteractiveRow() {
+  const execution = useInteractiveExecutionControls(baseExecution);
+  return (
+    <ModelPickerStoryQueryProvider>
+      <Row submitMode={{ kind: "ready" }} execution={execution} />
+    </ModelPickerStoryQueryProvider>
+  );
+}
+
 export function ControlEmphasis() {
   return (
     <div className="mx-auto flex min-h-[28rem] w-full max-w-3xl items-end p-4">
@@ -863,8 +876,11 @@ export function ControlEmphasis() {
 export function Overview() {
   return (
     <StoryCard>
-      <StoryRow label="ready" hint="idle thread — submit normally; no stop">
-        <Row submitMode={{ kind: "ready" }} />
+      <StoryRow
+        label="ready"
+        hint="interactive provider, model, reasoning, and fast mode"
+      >
+        <InteractiveRow />
       </StoryRow>
       <StoryRow
         label="queue"
@@ -878,11 +894,11 @@ export function Overview() {
         />
       </StoryRow>
       <StoryRow
-        label="stop-only"
-        hint="host-reconnecting — composer locked; only Stop available"
+        label="queue: host-reconnecting"
+        hint="host-reconnecting — submit queues; stop button visible"
       >
         <Row
-          submitMode={{ kind: "stop-only", onStop: noop }}
+          submitMode={{ kind: "queue", onStop: noop }}
           threadRuntimeDisplayStatus="host-reconnecting"
           environmentSummary={remoteEnvironmentSummary}
         />
@@ -897,11 +913,11 @@ export function Overview() {
         />
       </StoryRow>
       <StoryRow
-        label="stop-only: starting"
-        hint="environment still spinning up — follow-up locked; only Stop available"
+        label="queue: starting"
+        hint="environment still spinning up — submit queues; stop button visible"
       >
         <Row
-          submitMode={{ kind: "stop-only", onStop: noop }}
+          submitMode={{ kind: "queue", onStop: noop }}
           threadRuntimeDisplayStatus="starting"
           environmentSummary={provisioningEnvironmentSummary}
         />
@@ -1134,7 +1150,7 @@ export function EnvironmentMatrix() {
         hint="runtime loading icon + lifecycle label; no environment-type tooltip yet"
       >
         <Row
-          submitMode={{ kind: "stop-only", onStop: noop }}
+          submitMode={{ kind: "queue", onStop: noop }}
           threadRuntimeDisplayStatus="starting"
           environmentSummary={provisioningEnvironmentSummary}
         />

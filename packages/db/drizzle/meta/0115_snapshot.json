@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4c7ff65c-72bb-4e02-95ef-8848401383e5",
+  "id": "29773b03-78e7-4083-a89c-e38d38412675",
   "prevId": "bd7bafd1-abb9-4c3e-871c-9c7a26aeb3cf",
   "tables": {
     "app_settings": {
@@ -3628,59 +3628,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "thread_plugin_metadata": {
-      "name": "thread_plugin_metadata",
-      "columns": {
-        "thread_id": {
-          "name": "thread_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "plugin_id": {
-          "name": "plugin_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "metadata_json": {
-          "name": "metadata_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "thread_plugin_metadata_thread_id_threads_id_fk": {
-          "name": "thread_plugin_metadata_thread_id_threads_id_fk",
-          "tableFrom": "thread_plugin_metadata",
-          "tableTo": "threads",
-          "columnsFrom": [
-            "thread_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "thread_plugin_metadata_thread_id_plugin_id_pk": {
-          "columns": [
-            "thread_id",
-            "plugin_id"
-          ],
-          "name": "thread_plugin_metadata_thread_id_plugin_id_pk"
-        }
-      },
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "thread_search_segments": {
       "name": "thread_search_segments",
       "columns": {
@@ -4214,6 +4161,44 @@
           "onUpdate": "no action"
         }
       },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "ui_preferences": {
+      "name": "ui_preferences",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "value_json": {
+          "name": "value_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}

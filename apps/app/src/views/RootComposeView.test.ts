@@ -4,7 +4,6 @@ import {
   type ThreadListEntry,
 } from "@bb/domain";
 import type {
-  ProjectBranchesResponse,
   ProjectWithThreadsResponse,
   SidebarBootstrapResponse,
   SystemEnvironmentProvider,
@@ -13,7 +12,6 @@ import type {
 import { describe, expect, it } from "vitest";
 import type { ReuseThreadOption } from "@/components/pickers/ReuseEnvironmentPicker";
 import {
-  hasPromptOptionValueChanged,
   mergeMissingPromptDraftAttachments,
   resolveNewThreadProjectDefaultsState,
   resolveNewThreadSubmitDisabledReason,
@@ -21,7 +19,6 @@ import {
   type ResolveNewThreadSubmitDisabledReasonArgs,
 } from "@/components/promptbox/NewThreadComposer";
 import { getProjectStoredPromptAttachmentPaths } from "@bb/client-core";
-import { THREAD_HANDOFF_CREATE_SEED_LOCATION_STATE_KEY } from "@bb/client-core";
 import {
   buildRootComposeTerminalSessions,
   buildMobileRecentThreads,
@@ -43,7 +40,6 @@ import {
 import { makeTerminalSession as makeTerminalSessionFixture } from "@/test/fixtures/terminal-sessions";
 import {
   buildReuseThreadOptions,
-  resolveProjectSourceGitDisabledReason,
   resolveRootComposeEffectiveEnvironmentValue,
 } from "./root-compose-environment-selection";
 
@@ -157,11 +153,11 @@ describe("resolveNewThreadProjectDefaultsState", () => {
 describe("resolveNewThreadSubmitDisabledReason", () => {
   const readyState = {
     environmentProviderInputsBlocker: null,
+    environmentSetupRequiredReason: null,
     isCopyingAttachments: false,
     isLoadingModels: false,
     isSubmitting: false,
     isUploading: false,
-    gitCheckoutUnavailableReason: null,
     modelLoadError: null,
     projectDefaultsStatus: "resolved",
     projectDefaultsUnavailable: false,
@@ -171,6 +167,18 @@ describe("resolveNewThreadSubmitDisabledReason", () => {
     selectedThreadModel: "gpt-5.6-sol",
     submissionEnvironmentUnavailable: false,
   } satisfies ResolveNewThreadSubmitDisabledReasonArgs;
+
+  it("blocks the send while the selected environment needs setting up", () => {
+    expect(
+      resolveNewThreadSubmitDisabledReason({
+        ...readyState,
+        environmentSetupRequiredReason:
+          "Modal Sandbox is not configured: set tokenId, tokenSecret in the plugin's settings.",
+      }),
+    ).toBe(
+      "Modal Sandbox is not configured: set tokenId, tokenSecret in the plugin's settings.",
+    );
+  });
 
   it.each<
     [
@@ -225,14 +233,6 @@ describe("resolveNewThreadSubmitDisabledReason", () => {
       "Docker container needs its plugin's control",
     ],
     [
-      "an unavailable worktree",
-      {
-        gitCheckoutUnavailableReason:
-          "Project source has no commits. Create an initial commit before creating a worktree",
-      },
-      "Project source has no commits. Create an initial commit before creating a worktree",
-    ],
-    [
       "an empty prompt",
       { promptInputEmpty: true },
       "Enter a prompt or attach a file.",
@@ -284,12 +284,15 @@ function makeProjectSource(hostId = "host_1"): ProjectSource {
 
 function makeProjectProvider(id: string): SystemEnvironmentProvider {
   return {
+    machineProviderId: null,
     id,
     displayName: id,
-    icon: null,
+    description: "Prepare a workspace for this thread.",
+    icon: "Folder",
     logoUrl: null,
     pluginId: id,
     acceptsEmptyInputs: true,
+    machineAvailability: {},
     availability: null,
     requires: {
       projectCheckout: true,
@@ -306,12 +309,15 @@ function makeProjectlessProvider(
   projectless: boolean,
 ): SystemEnvironmentProvider {
   return {
+    machineProviderId: null,
     id,
     displayName: id,
-    icon: null,
+    description: "Prepare a workspace for this thread.",
+    icon: "Folder",
     logoUrl: null,
     pluginId: id,
     acceptsEmptyInputs: true,
+    machineAvailability: {},
     availability: null,
     requires: {
       projectCheckout: false,
@@ -368,27 +374,6 @@ function makeTerminalSession(
     updatedAt: 1,
     ...overrides,
   });
-}
-
-function makeProjectBranchesResponse(
-  overrides: Partial<ProjectBranchesResponse>,
-): ProjectBranchesResponse {
-  return {
-    branches: [],
-    branchesTruncated: false,
-    checkout: { kind: "branch", branchName: "main", headSha: null },
-    defaultBranch: "main",
-    defaultBranchRelation: "equal",
-    defaultWorktreeBaseBranch: "main",
-    isWorktree: false,
-    hasUncommittedChanges: false,
-    operation: { kind: "none" },
-    originDefaultBranch: "main",
-    remoteBranches: [],
-    remoteBranchesTruncated: false,
-    selectedBranch: null,
-    ...overrides,
-  };
 }
 
 describe("buildMobileRecentThreads", () => {
@@ -727,18 +712,6 @@ describe("restorePromptDraftAfterOptionChange", () => {
   });
 });
 
-describe("hasPromptOptionValueChanged", () => {
-  it("treats unchanged prompt option values as no-ops", () => {
-    expect(hasPromptOptionValueChanged("codex", "codex")).toBe(false);
-    expect(hasPromptOptionValueChanged(undefined, undefined)).toBe(false);
-  });
-
-  it("detects changed prompt option values", () => {
-    expect(hasPromptOptionValueChanged("codex", "claude")).toBe(true);
-    expect(hasPromptOptionValueChanged(undefined, "auto")).toBe(true);
-  });
-});
-
 describe("hasSingleUseRootComposeTargetState", () => {
   it("treats section targets as single-use navigation state", () => {
     expect(hasSingleUseRootComposeTargetState({ sectionId: "sec_work" })).toBe(
@@ -750,19 +723,6 @@ describe("hasSingleUseRootComposeTargetState", () => {
     expect(hasSingleUseRootComposeTargetState({ focusPrompt: true })).toBe(
       true,
     );
-  });
-
-  it("treats handoff seeds as single-use target state", () => {
-    expect(
-      hasSingleUseRootComposeTargetState({
-        [THREAD_HANDOFF_CREATE_SEED_LOCATION_STATE_KEY]: {
-          environmentId: "env_source",
-          projectId: "proj_source",
-          sourceThreadId: "thr_source",
-          sourceThreadTitle: "Source thread",
-        },
-      }),
-    ).toBe(true);
   });
 
   it("ignores non-target state", () => {
@@ -809,42 +769,6 @@ describe("shouldNavigateAfterThreadCreate", () => {
         navigateToThreadAfterCreate: false,
       }),
     ).toBe(true);
-  });
-});
-
-describe("resolveProjectSourceGitDisabledReason", () => {
-  it("explains why non-git and commitless sources cannot create worktrees", () => {
-    expect(resolveProjectSourceGitDisabledReason(undefined)).toBeNull();
-    expect(
-      resolveProjectSourceGitDisabledReason(makeProjectBranchesResponse({})),
-    ).toBeNull();
-    expect(
-      resolveProjectSourceGitDisabledReason(
-        makeProjectBranchesResponse({
-          checkout: {
-            kind: "unknown",
-            reason: "Path is not a git repository",
-          },
-          defaultBranch: null,
-          defaultBranchRelation: null,
-          defaultWorktreeBaseBranch: null,
-          originDefaultBranch: null,
-        }),
-      ),
-    ).toBe("New worktrees require a Git repository with at least one commit");
-    expect(
-      resolveProjectSourceGitDisabledReason(
-        makeProjectBranchesResponse({
-          checkout: { kind: "unborn", branchName: "main" },
-          defaultBranch: null,
-          defaultBranchRelation: null,
-          defaultWorktreeBaseBranch: null,
-          originDefaultBranch: null,
-        }),
-      ),
-    ).toBe(
-      "Project source has no commits. Create an initial commit before creating a worktree",
-    );
   });
 });
 
@@ -948,7 +872,7 @@ describe("resolveRootComposeEffectiveEnvironmentValue", () => {
     ).toBe("provider:project-checkout");
   });
 
-  it("holds specific reuse values as incomplete while project worktrees load", () => {
+  it("holds a specific reuse selection while project worktrees load", () => {
     expect(
       resolveRootComposeEffectiveEnvironmentValue({
         knownHostIds: new Set(["host_1"]),
@@ -960,7 +884,7 @@ describe("resolveRootComposeEffectiveEnvironmentValue", () => {
         reuseThreadOptions: [],
         reuseThreadOptionsLoading: true,
       }),
-    ).toBe("reuse");
+    ).toBe("reuse:env_pending");
   });
 
   it("keeps a projectless reuse selection when the environment is one of its own", () => {

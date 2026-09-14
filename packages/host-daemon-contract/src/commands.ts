@@ -26,8 +26,11 @@ import {
   providerNativeRootSetSchema,
   BRANCH_LIST_LIMIT_MAX,
   BRANCH_LIST_QUERY_MAX_LENGTH,
+  FILE_LIST_EXCLUDE_NAME_MAX_LENGTH,
+  FILE_LIST_EXCLUDE_NAMES_MAX,
   FILE_LIST_LIMIT_MAX,
   FILE_LIST_QUERY_MAX_LENGTH,
+  flattenPromptInputGroups,
 } from "@bb/domain";
 import { z } from "zod";
 import {
@@ -62,6 +65,8 @@ export {
 export {
   BRANCH_LIST_LIMIT_MAX,
   BRANCH_LIST_QUERY_MAX_LENGTH,
+  FILE_LIST_EXCLUDE_NAME_MAX_LENGTH,
+  FILE_LIST_EXCLUDE_NAMES_MAX,
   FILE_LIST_LIMIT_MAX,
   FILE_LIST_QUERY_MAX_LENGTH,
 } from "@bb/domain";
@@ -186,9 +191,13 @@ export const hostDaemonContributedEnvEntrySchema = z
       z.string(),
       z.object({ serverPath: z.string().startsWith("/") }).strict(),
     ]),
-    source: z.object({ plugin: z.string().min(1) }).strict(),
+    source: z.union([
+      z.object({ plugin: z.string().min(1) }).strict(),
+      z
+        .object({ core: z.enum(["machine-git", "machine-environment"]) })
+        .strict(),
+    ]),
     reason: z.string(),
-    secret: z.boolean(),
   })
   .strict();
 export type HostDaemonContributedEnvEntry = z.infer<
@@ -242,16 +251,6 @@ type HostDaemonPromptInput = z.infer<typeof promptInputSchema>;
 interface GroupedPromptInputCommand {
   input: HostDaemonPromptInput[];
   inputGroups?: HostDaemonPromptInput[][];
-}
-
-function flattenPromptInputGroups(
-  inputGroups: readonly HostDaemonPromptInput[][],
-): HostDaemonPromptInput[] {
-  return inputGroups.flatMap((inputGroup, index) =>
-    index === 0
-      ? inputGroup
-      : [{ type: "text" as const, text: "\n\n", mentions: [] }, ...inputGroup],
-  );
 }
 
 function refineGroupedInputMatchesFlatInput(
@@ -475,11 +474,18 @@ const hostWriteFileCommandSchema = z
   })
   .strict();
 
+const fileListExcludeNamesSchema = z
+  .array(z.string().min(1).max(FILE_LIST_EXCLUDE_NAME_MAX_LENGTH))
+  .max(FILE_LIST_EXCLUDE_NAMES_MAX);
+
 const hostListFilesCommandSchema = z.object({
   type: z.literal("host.list_files"),
   path: z.string().min(1),
   query: z.string().max(FILE_LIST_QUERY_MAX_LENGTH).optional(),
   limit: z.number().int().positive().max(FILE_LIST_LIMIT_MAX),
+  includeHidden: z.boolean(),
+  respectGitIgnore: z.boolean(),
+  excludeNames: fileListExcludeNamesSchema,
 });
 
 const hostPathEntryKindSchema = z.enum(["file", "directory"]);
@@ -502,6 +508,9 @@ const hostListPathsCommandSchema = z
     limit: z.number().int().positive().max(FILE_LIST_LIMIT_MAX),
     includeFiles: z.boolean(),
     includeDirectories: z.boolean(),
+    includeHidden: z.boolean(),
+    respectGitIgnore: z.boolean(),
+    excludeNames: fileListExcludeNamesSchema,
   })
   .refine((command) => command.includeFiles || command.includeDirectories, {
     message: "At least one path kind must be included",
@@ -562,6 +571,8 @@ const projectCloneDefaultPathCommandSchema = z
 const projectCloneCommandSchema = z
   .object({
     type: z.literal("project.clone"),
+    operationId: z.string().min(1),
+    contributedEnv: z.array(hostDaemonContributedEnvEntrySchema).default([]),
     remoteUrl: z.string().min(1),
     projectSlug: z.string().min(1),
     targetPath: z.string().min(1).optional(),
@@ -586,7 +597,8 @@ const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 const environmentHookRunCommandSchema = z
   .object({
     type: z.literal("environment.hook.run"),
-    resumeOnly: z.boolean(),
+    contributedEnv: z.array(hostDaemonContributedEnvEntrySchema).default([]),
+    resumeOnly: z.boolean().default(false),
     operationId: z.string().min(1),
     path: z.string().min(1),
     kind: z.enum(["setup", "teardown"]),
@@ -604,6 +616,7 @@ const environmentHookCancelCommandSchema = z
 const pluginHostCallCommandSchema = z
   .object({
     type: z.literal("plugin.host.call"),
+    contributedEnv: z.array(hostDaemonContributedEnvEntrySchema).default([]),
     pluginId: z.string().min(1),
     generation: z.string().min(1),
     artifact: pluginHostArtifactSchema,
@@ -875,6 +888,8 @@ const unmanagedEnvironmentProvisionCommandSchema =
   environmentProvisionCommandBaseSchema
     .extend({
       path: z.string().min(1),
+      setupScriptTimeoutMs: z.number().int().positive().nullable(),
+      contributedEnv: z.array(hostDaemonContributedEnvEntrySchema),
     })
     .strict();
 
@@ -1361,6 +1376,25 @@ export const hostDaemonCommandRegistry = {
     schema: desktopBrowserCommandSchemas["desktop.browser.release_control"],
     resultSchema:
       desktopBrowserResultSchemas["desktop.browser.release_control"],
+    transport: "onlineRpc",
+    retryable: false,
+    flushEventsBeforeResult: false,
+    envLane: null,
+  }),
+  "desktop.browser.list_import_sources": defineHostDaemonCommandDescriptor({
+    type: "desktop.browser.list_import_sources",
+    schema: desktopBrowserCommandSchemas["desktop.browser.list_import_sources"],
+    resultSchema:
+      desktopBrowserResultSchemas["desktop.browser.list_import_sources"],
+    transport: "onlineRpc",
+    retryable: false,
+    flushEventsBeforeResult: false,
+    envLane: null,
+  }),
+  "desktop.browser.import_cookies": defineHostDaemonCommandDescriptor({
+    type: "desktop.browser.import_cookies",
+    schema: desktopBrowserCommandSchemas["desktop.browser.import_cookies"],
+    resultSchema: desktopBrowserResultSchemas["desktop.browser.import_cookies"],
     transport: "onlineRpc",
     retryable: false,
     flushEventsBeforeResult: false,
