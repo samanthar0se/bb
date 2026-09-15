@@ -9,7 +9,11 @@ import type {
   SystemEnvironmentProvider,
   SystemMachineProvider,
 } from "@bb/server-contract";
-import { EnvironmentSlot, ProjectlessMachineSlot } from "./NewThreadPromptBox";
+import {
+  EnvironmentSlot,
+  NewThreadPromptBoxUI,
+  ProjectlessMachineSlot,
+} from "./NewThreadPromptBox";
 
 const host = makeHost({
   id: "host_test",
@@ -19,6 +23,88 @@ const host = makeHost({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("NewThreadPromptBoxUI", () => {
+  it("renders the core composer without a plugin slot context", () => {
+    expect(() =>
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <NewThreadPromptBoxUI
+            value=""
+            mentionRanges={[]}
+            onChange={vi.fn()}
+            onSubmit={vi.fn()}
+            isSubmitting={false}
+            disabled={false}
+            history={{
+              currentDraft: { text: "", mentions: [], attachments: [] },
+              entries: [],
+              onSelectEntry: vi.fn(),
+            }}
+            typeahead={{
+              mention: {
+                results: { groups: [], suggestions: [] },
+                isLoading: false,
+                isError: false,
+                onQueryChange: vi.fn(),
+              },
+              command: {
+                trigger: null,
+                suggestions: [],
+                isLoading: false,
+                isError: false,
+                hasMore: false,
+                isLoadingMore: false,
+                loadMore: vi.fn(),
+                onQueryChange: vi.fn(),
+              },
+            }}
+            attachments={{ items: [] }}
+            modeConfig={{
+              environment: {
+                value: "host:host_test:local",
+                sources: [],
+                host,
+                isLocal: true,
+              },
+              worktree: { options: [], value: null, onChange: vi.fn() },
+              permission: {
+                value: "auto",
+                options: [{ value: "auto", label: "Approve for me" }],
+                onChange: vi.fn(),
+                supported: true,
+              },
+            }}
+            execution={{
+              provider: {
+                options: [{ value: "polytoken", label: "Polytoken" }],
+                selectedId: "polytoken",
+                hasMultiple: false,
+              },
+              model: {
+                active: null,
+                selected: "polytoken-managed",
+                options: [
+                  { value: "polytoken-managed", label: "Managed by Polytoken" },
+                ],
+                moreOptions: [],
+                isLoading: false,
+                loadFailed: false,
+                loadError: null,
+                onChange: vi.fn(),
+              },
+              reasoning: {
+                value: "medium",
+                options: [{ value: "medium", label: "Medium" }],
+                onChange: vi.fn(),
+              },
+            }}
+          />
+        </QueryClientProvider>,
+      ),
+    ).not.toThrow();
+  });
 });
 
 describe("ProjectlessMachineSlot", () => {

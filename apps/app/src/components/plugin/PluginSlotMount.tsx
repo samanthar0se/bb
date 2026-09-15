@@ -1,4 +1,11 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import {
+  Component,
+  useCallback,
+  useMemo,
+  useSyncExternalStore,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import { Pill } from "@bb/shared-ui/pill";
 import { useRouteAnchorDelegate } from "@/components/ui/app-route-anchor";
 import { usePluginCss } from "@/lib/plugin-css";
@@ -7,6 +14,11 @@ import {
   PluginSlotOwnershipContext,
   type PluginSlotOwnershipRegistry,
 } from "./plugin-context";
+import {
+  PluginComposerViewProvider,
+  useOptionalPluginComposerView,
+  usePluginComposerHost,
+} from "./plugin-composer-host";
 
 const crashedSlotInstances = new Set<string>();
 const ownedStateReleasesBySlotInstance = new Map<
@@ -160,6 +172,44 @@ class PluginSlotBoundary extends Component<
   }
 }
 
+const subscribeToNoPluginMetadata = () => () => {};
+
+function PluginSlotComposerView({
+  children,
+  pluginId,
+}: {
+  children: ReactNode;
+  pluginId: string;
+}) {
+  const host = usePluginComposerHost();
+  const view = useOptionalPluginComposerView();
+  const subscribe =
+    host?.subscribePluginMetadata ?? subscribeToNoPluginMetadata;
+  const getSnapshot = useCallback(
+    () => host?.getPluginMetadata?.(pluginId) ?? null,
+    [host, pluginId],
+  );
+  const pluginMetadata = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getSnapshot,
+  );
+  const pluginView = useMemo(
+    () =>
+      view === undefined
+        ? undefined
+        : { ...view, experimental_pluginMetadata: pluginMetadata },
+    [pluginMetadata, view],
+  );
+  return pluginView === undefined ? (
+    children
+  ) : (
+    <PluginComposerViewProvider value={pluginView}>
+      {children}
+    </PluginComposerViewProvider>
+  );
+}
+
 interface PluginSlotMountProps {
   pluginId: string;
   slotKind: string;
@@ -194,14 +244,16 @@ export function PluginSlotMount({
         fallback={crashFallback}
         {...(onCrash ? { onCrash } : {})}
       >
-        <div
-          data-bb-plugin-root=""
-          data-bb-plugin={pluginId}
-          className="contents"
-          onClick={onRouteAnchorClick}
-        >
-          {children}
-        </div>
+        <PluginSlotComposerView pluginId={pluginId}>
+          <div
+            data-bb-plugin-root=""
+            data-bb-plugin={pluginId}
+            className="contents"
+            onClick={onRouteAnchorClick}
+          >
+            {children}
+          </div>
+        </PluginSlotComposerView>
       </PluginSlotBoundary>
     </PluginContext.Provider>
   );

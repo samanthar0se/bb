@@ -53,6 +53,7 @@ import { PluginContext } from "./plugin-context";
 import {
   PluginComposerHostProvider,
   PluginComposerHostScopeProvider,
+  PluginComposerViewProvider,
   type PluginComposerHost,
   useComposerHostDraftNotifier,
   usePublishPluginComposerHost,
@@ -357,6 +358,106 @@ describe("useComposer", () => {
     const view = useComposerView();
     return <ComposerActionsSlot view={view} />;
   }
+
+  it("specializes composer metadata by plugin namespace and reacts to updates", () => {
+    function MetadataProbe({ label }: { label: string }) {
+      const view = useComposerView();
+      return (
+        <div data-testid={`${label}-metadata`}>
+          {JSON.stringify(view.experimental_pluginMetadata)}
+        </div>
+      );
+    }
+    setPluginSlotRegistrations(
+      "alpha",
+      registrationSet({
+        composerCustomizations: [
+          {
+            id: "metadata",
+            actions: [
+              {
+                id: "metadata",
+                component: () => <MetadataProbe label="alpha" />,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    setPluginSlotRegistrations(
+      "beta",
+      registrationSet({
+        composerCustomizations: [
+          {
+            id: "metadata",
+            actions: [
+              {
+                id: "metadata",
+                component: () => <MetadataProbe label="beta" />,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const metadata = new Map([
+      ["alpha", { facet: "review" }],
+      ["beta", { model: "fast" }],
+    ]);
+    const listeners = new Set<() => void>();
+    const draft: PromptDraftState = { text: "", mentions: [], attachments: [] };
+    const host: PluginComposerHost = {
+      scope: { kind: "new-thread", projectId: PERSONAL_PROJECT_ID },
+      textEffectKey: "new-thread:metadata-test",
+      getCurrent: () => draft,
+      subscribeDraft: () => () => {},
+      setDraft: () => {},
+      focus: () => {},
+      getPluginMetadata: (pluginId) => metadata.get(pluginId) ?? {},
+      subscribePluginMetadata: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <PluginComposerViewProvider
+          value={{
+            scope: host.scope,
+            layout: "expanded",
+            experimental_selectedProviderId: "provider:alpha",
+            draft: { text: "", isEmpty: true, attachmentCount: 0 },
+            experimental_pluginMetadata: null,
+            run: { isRunning: false, isSubmitting: false },
+          }}
+        >
+          <PluginComposerHostProvider value={host}>
+            <ComposerCustomizationMount />
+          </PluginComposerHostProvider>
+        </PluginComposerViewProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId("alpha-metadata").textContent).toBe(
+      JSON.stringify({ facet: "review" }),
+    );
+    expect(screen.getByTestId("beta-metadata").textContent).toBe(
+      JSON.stringify({ model: "fast" }),
+    );
+
+    act(() => {
+      metadata.set("alpha", { facet: "plan" });
+      metadata.set("beta", { model: "precise" });
+      for (const listener of [...listeners]) listener();
+    });
+    expect(screen.getByTestId("alpha-metadata").textContent).toBe(
+      JSON.stringify({ facet: "plan" }),
+    );
+    expect(screen.getByTestId("beta-metadata").textContent).toBe(
+      JSON.stringify({ model: "precise" }),
+    );
+  });
 
   it("writes quotes into the thread draft and fires the focus bus", () => {
     registerComposerProbe("t");

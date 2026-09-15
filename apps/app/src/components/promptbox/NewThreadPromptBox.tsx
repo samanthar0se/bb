@@ -40,7 +40,6 @@ import {
   type TypeaheadConfig,
 } from "@/components/promptbox/PromptBoxInternal";
 import { usePromptModePermissionDisplay } from "@/components/promptbox/usePromptModePermissionDisplay";
-import { usePluginId } from "@/components/plugin/plugin-context";
 import { usePromptVoice } from "@/components/promptbox/usePromptVoice";
 import { useOptionalPaneContext } from "@/views/thread-detail/PaneContext";
 import {
@@ -185,7 +184,6 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
   }, []);
   const voice = usePromptVoice(promptBoxRef);
   const attachmentCount = attachments.items?.length ?? 0;
-  const pluginId = usePluginId();
   const [composerLayout, setComposerLayout] =
     useState<ComposerView["layout"]>("expanded");
   const composerView = usePluginComposerViewModel({
@@ -196,7 +194,6 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
     attachmentCount,
     isRunning: false,
     isSubmitting,
-    pluginMetadata: pluginComposerHost?.getPluginMetadata?.(pluginId),
   });
   const controller = useComposerExtensionController({
     host: pluginComposerHost ?? null,
