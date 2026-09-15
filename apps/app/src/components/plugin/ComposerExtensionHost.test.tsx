@@ -61,6 +61,7 @@ function RendererProbe() {
       data-testid="renderer"
       data-host-text={hostDraft?.text}
       data-scope={view?.scope.kind}
+      data-provider={view?.experimental_selectedProviderId ?? "null"}
     />
   );
 }
@@ -69,10 +70,12 @@ function Harness({
   hasHost = true,
   isFocused = true,
   isPrimary = true,
+  selectedProviderId = null,
 }: {
   hasHost?: boolean;
   isFocused?: boolean;
   isPrimary?: boolean;
+  selectedProviderId?: string | null;
 }) {
   const host = useMemo<PluginComposerHost>(
     () => ({
@@ -89,10 +92,11 @@ function Harness({
     () => ({
       scope: host.scope,
       layout: "expanded" as const,
+      experimental_selectedProviderId: selectedProviderId,
       draft: { text: draft.text, isEmpty: false, attachmentCount: 0 },
       run: { isRunning: false, isSubmitting: false },
     }),
-    [host.scope],
+    [host.scope, selectedProviderId],
   );
   const controller = useComposerExtensionController({
     host: hasHost ? host : null,
@@ -146,6 +150,29 @@ describe("ComposerExtensionHost", () => {
     expect(mocks.collapseIfFocused).toHaveBeenCalledOnce();
     expect(mocks.focusHost).not.toHaveBeenCalled();
     expect(mocks.focusDefault).not.toHaveBeenCalled();
+  });
+
+  it("exposes the selected provider and updates mounted plugins reactively", () => {
+    const rendered = renderHarness({ selectedProviderId: "project-provider" });
+    expect(screen.getByTestId("renderer").getAttribute("data-provider")).toBe(
+      "project-provider",
+    );
+    rendered.rerender(
+      <AppCommandProvider>
+        <Harness selectedProviderId="switched-provider" />
+      </AppCommandProvider>,
+    );
+    expect(screen.getByTestId("renderer").getAttribute("data-provider")).toBe(
+      "switched-provider",
+    );
+    rendered.rerender(
+      <AppCommandProvider>
+        <Harness selectedProviderId={null} />
+      </AppCommandProvider>,
+    );
+    expect(screen.getByTestId("renderer").getAttribute("data-provider")).toBe(
+      "null",
+    );
   });
 
   it("keeps focus pane-scoped and preserves the hostless fallback", () => {

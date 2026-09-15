@@ -189,6 +189,7 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
   const composerView = usePluginComposerViewModel({
     scope: pluginComposerHost?.scope ?? DEFAULT_COMPOSER_SCOPE,
     layout: composerLayout,
+    experimental_selectedProviderId: execution.provider.selectedId ?? null,
     text: value,
     attachmentCount,
     isRunning: false,
@@ -307,6 +308,7 @@ const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
         onSubmit={onSubmit}
         textEffects={textEffects}
         onComposerLayoutChange={onComposerLayoutChange}
+        experimental_selectedProviderId={execution.provider.selectedId ?? null}
         history={history}
         typeahead={typeahead}
         mentionMenuPlacement="bottom"

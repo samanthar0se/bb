@@ -77,6 +77,7 @@ export function useComposerHostDraftNotifier(
 interface PluginComposerViewModelInput {
   scope: PluginComposerScope;
   layout: ComposerView["layout"];
+  experimental_selectedProviderId?: string | null;
   text: string;
   attachmentCount: number;
   isRunning: boolean;
@@ -86,6 +87,7 @@ interface PluginComposerViewModelInput {
 export function usePluginComposerViewModel({
   scope,
   layout,
+  experimental_selectedProviderId = null,
   text,
   attachmentCount,
   isRunning,
@@ -95,6 +97,7 @@ export function usePluginComposerViewModel({
     () => ({
       scope,
       layout,
+      experimental_selectedProviderId,
       draft: {
         text,
         isEmpty: isComposerDraftEmpty(text, attachmentCount),
@@ -102,7 +105,7 @@ export function usePluginComposerViewModel({
       },
       run: { isRunning, isSubmitting },
     }),
-    [attachmentCount, isRunning, isSubmitting, layout, scope, text],
+    [attachmentCount, experimental_selectedProviderId, isRunning, isSubmitting, layout, scope, text],
   );
 }
 

@@ -571,6 +571,11 @@ export function useComposerInputLock(storageKey: string | null): boolean {
 
 export function useComposerView(): ComposerView {
   const providedView = useContext(PluginComposerViewContext);
+  if (providedView !== undefined) return providedView;
+  return useFallbackComposerView();
+}
+
+function useFallbackComposerView(): ComposerView {
   const composerHost = usePluginComposerHost();
   const { projectId, threadId } = useRouteState();
   const routeScope: PromptDraftScope = useMemo(
@@ -591,6 +596,7 @@ export function useComposerView(): ComposerView {
           ? { kind: "thread", threadId }
           : { kind: "new-thread", projectId: projectId ?? null }),
       layout: "expanded",
+      experimental_selectedProviderId: null,
       draft: {
         text: draft.text,
         isEmpty: isPromptDraftEmpty(draft),
@@ -600,7 +606,7 @@ export function useComposerView(): ComposerView {
     }),
     [composerHost?.scope, draft, projectId, threadId],
   );
-  return providedView ?? fallback;
+  return fallback;
 }
 
 export function useComposer(): PluginComposerApi {

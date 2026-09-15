@@ -27,6 +27,7 @@ import { makePluginRegistrationSet } from "@/test/fixtures/plugins";
 const VIEW: ComposerView = {
   scope: { kind: "new-thread", projectId: null },
   layout: "expanded",
+  experimental_selectedProviderId: null,
   draft: { text: "", isEmpty: true, attachmentCount: 0 },
   run: { isRunning: false, isSubmitting: false },
 };

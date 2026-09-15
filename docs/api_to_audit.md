@@ -2529,6 +2529,12 @@ deliberately: it mounts once, and a crash there should disable it everywhere.
 Confirm that split before stabilizing, and decide whether other multi-mount
 slots need the same treatment.
 
+## `ComposerView.experimental_selectedProviderId` (`@get-bb/plugin-sdk/app`)
+
+**Kept experimental.** Reports the effective provider selected in the composer where the plugin is mounted. It is reactive: mounted plugins receive the current value after provider switches, including when a project default differs from the selected value. It is `null` while the host has not resolved a provider, and does not expose provider metadata or server state.
+
+**Audit before stabilizing.** Confirm the value remains identical across new-thread, follow-up, queued-message, side-chat, and plugin-hosted composers; verify updates on provider switches and project changes; define the unresolved transition and behavior when the selected provider is unavailable; then audit consumers, rename the field project-wide, and remove this entry before dropping the experimental prefix.
+
 ## `useComposer().experimental_submit` (`@get-bb/plugin-sdk/app`)
 
 **What it does.** Runs the composer's own submit pipeline with the draft that

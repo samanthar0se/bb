@@ -66,6 +66,7 @@ import {
 type PromptBoxWithScrollAnchorProps = ComponentProps<
   typeof PromptBoxInternal
 > & {
+  experimental_selectedProviderId?: string | null;
   scrollToBottomOnModifierSubmit?: boolean;
   scrollToBottomOnSubmit?: boolean;
 };
@@ -75,6 +76,7 @@ function PromptBoxWithScrollAnchor({
   scrollToBottomOnModifierSubmit = true,
   scrollToBottomOnSubmit = true,
   submission,
+  experimental_selectedProviderId = null,
   ...promptBoxProps
 }: PromptBoxWithScrollAnchorProps) {
   const bottomAnchor = useBottomAnchoredScroll();
@@ -105,6 +107,7 @@ function PromptBoxWithScrollAnchor({
   return (
     <PromptBoxInternal
       {...promptBoxProps}
+      experimental_selectedProviderId={experimental_selectedProviderId}
       onSubmit={handleSubmit}
       submission={anchoredSubmission}
     />
@@ -193,6 +196,7 @@ function FollowUpPromptBoxStackOnly({
   const composerView = usePluginComposerViewModel({
     scope: composerScope ?? DEFAULT_COMPOSER_SCOPE,
     layout: "expanded",
+    experimental_selectedProviderId: null,
     text: hostDraft?.text ?? "",
     attachmentCount: hostDraft?.attachments.length ?? 0,
     isRunning: false,
@@ -268,6 +272,7 @@ function FollowUpPromptBoxWithComposer({
   const composerView = usePluginComposerViewModel({
     scope: composerScope ?? DEFAULT_COMPOSER_SCOPE,
     layout: composerLayout,
+    experimental_selectedProviderId: execution.provider.selectedId ?? null,
     text: composer.message,
     attachmentCount,
     isRunning: canStopRuntime,
@@ -709,6 +714,7 @@ function FollowUpPromptBoxWithComposer({
         blurOnPointerSubmit={isCompactViewport && isPointerCoarse}
         textEffects={textEffects}
         onComposerLayoutChange={setComposerLayout}
+        experimental_selectedProviderId={execution.provider.selectedId ?? null}
         scrollToBottomOnSubmit={
           submitMode.kind !== "queue" || steerOnPrimarySubmit
         }

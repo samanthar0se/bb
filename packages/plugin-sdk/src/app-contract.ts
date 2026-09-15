@@ -1822,6 +1822,8 @@ export interface ComposerPlusMenuItem {
 export interface ComposerView {
   scope: PluginComposerScope;
   layout: "expanded" | "compact" | "zen";
+  /** Effective provider selected in this composer, or null while unresolved. */
+  experimental_selectedProviderId: string | null;
   draft: { text: string; isEmpty: boolean; attachmentCount: number };
   run: { isRunning: boolean; isSubmitting: boolean };
 }

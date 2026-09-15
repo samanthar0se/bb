@@ -368,6 +368,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
         bullets: [
           "Read the draft prompt's text, whether it is empty, and how many files are attached",
           "Read the prompt box's layout and whether the thread is already running a turn",
+          "Read the effective provider selected in that composer, or null while selection is unresolved",
           "Lock the input and release it again, so the draft prompt cannot change mid-operation",
           "Mark the thread row as running while the input is locked, with a [thread row status](thread-row-status)",
         ],

@@ -182,6 +182,7 @@ interface TestComposerStore {
   api: Omit<PluginComposerApi, "scope" | "text">;
   getAttachmentCount(): number;
   getScope(): PluginComposerScope;
+  getSelectedProviderId(): string | null;
   getText(): string;
   getVersionSnapshot(): number;
   subscribe(listener: () => void): () => void;
@@ -941,6 +942,7 @@ const testPluginSdkApp = {
       return {
         scope: composer.getScope(),
         layout: "expanded",
+        experimental_selectedProviderId: composer.getSelectedProviderId(),
         draft: {
           text,
           isEmpty: isComposerDraftEmpty(text, attachmentCount),
@@ -1199,6 +1201,7 @@ export interface RenderSlotOptions<
     text?: string;
     scope?: PluginComposerScope;
     attachmentCount?: number;
+    experimental_selectedProviderId?: string | null;
   };
   /**
    * Threads and projects `experimental_useSidebarThreads()` reports. Omitted →
@@ -1595,6 +1598,8 @@ export function renderSlot<
   const composer: TestComposerStore = {
     getAttachmentCount: () => composerAttachmentCount,
     getScope: () => composerScope,
+    getSelectedProviderId: () =>
+      options.composer?.experimental_selectedProviderId ?? null,
     getText: () => composerText,
     getVersionSnapshot: () => composerVersion,
     subscribe(listener) {
