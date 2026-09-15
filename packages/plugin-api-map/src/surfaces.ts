@@ -371,6 +371,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
           "Read the effective provider selected in that composer, or null while selection is unresolved",
           "Lock the input and release it again, so the draft prompt cannot change mid-operation",
           "Mark the thread row as running while the input is locked, with a [thread row status](thread-row-status)",
+          "Read experimental per-plugin metadata on a composer draft and set the calling plugin's metadata for the new-thread draft",
         ],
         apiSymbols: ["ComposerView", "PluginComposerApi"],
       },

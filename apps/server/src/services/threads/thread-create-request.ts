@@ -24,6 +24,7 @@ export interface ThreadCreateServiceRequestInput {
   sendAt?: CreateThreadRequest["sendAt"];
   input: PromptInput[];
   pluginMetadata?: CreateThreadRequest["pluginMetadata"];
+  experimental_pluginMetadataByPlugin?: CreateThreadRequest["experimental_pluginMetadataByPlugin"];
   sectionId?: CreateThreadRequest["sectionId"];
   model?: CreateThreadRequest["model"];
   origin: ThreadCreateOrigin | null;
@@ -44,10 +45,11 @@ export interface ThreadCreateServiceRequestInput {
 
 export interface ThreadCreateServiceRequest extends Omit<
   ThreadCreateServiceRequestInput,
-  "environment" | "pluginMetadata" | "providerId"
+  "environment" | "pluginMetadata" | "experimental_pluginMetadataByPlugin" | "providerId"
 > {
   environment: EnvironmentArgs | ProviderEnvironmentArgs;
   pluginMetadata: { pluginId: string; metadata: JsonObject } | null;
+  experimental_pluginMetadataByPlugin?: CreateThreadRequest["experimental_pluginMetadataByPlugin"];
   providerId: string;
   titleFallback: string | null;
   visibility: ThreadVisibility;

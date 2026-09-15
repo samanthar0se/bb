@@ -2535,6 +2535,12 @@ slots need the same treatment.
 
 **Audit before stabilizing.** Confirm the value remains identical across new-thread, follow-up, queued-message, side-chat, and plugin-hosted composers; verify updates on provider switches and project changes; define the unresolved transition and behavior when the selected provider is unavailable; then audit consumers, rename the field project-wide, and remove this entry before dropping the experimental prefix.
 
+## `ComposerView.experimental_pluginMetadata` and `useComposer().experimental_setPluginMetadata` (`@get-bb/plugin-sdk/app`)
+
+**What it does.** New-thread composer drafts carry a persistent, per-plugin JSON object map keyed by the existing prompt draft storage key. A plugin reads its own namespace through `ComposerView.experimental_pluginMetadata` and writes only its own namespace through `experimental_setPluginMetadata`; empty objects clear it. Unsupported composers expose null. The map is submitted only from the normal app-origin create path and is not exposed in thread responses.
+
+**Audit before stabilizing.** Confirm namespace ownership, reload and provider-switch isolation, aggregate 256 KiB enforcement, and coherent clear/restore behavior under concurrent draft edits. Confirm fork rejection remains clear and preserves the draft.
+
 ## `useComposer().experimental_submit` (`@get-bb/plugin-sdk/app`)
 
 **What it does.** Runs the composer's own submit pipeline with the draft that

@@ -13,6 +13,7 @@ import {
 import type { ComposerView, PluginComposerScope } from "@get-bb/plugin-sdk";
 import { isComposerDraftEmpty } from "@get-bb/plugin-sdk/internal/composer-view";
 import type { PromptDraftState } from "@bb/client-core";
+import type { JsonObject } from "@bb/domain";
 
 export interface PluginComposerHost {
   scope: PluginComposerScope;
@@ -22,6 +23,9 @@ export interface PluginComposerHost {
   setDraft(next: PromptDraftState): void;
   focus(): void;
   submit?(options: { sendAt: number }): Promise<void>;
+  getPluginMetadata?(pluginId: string): JsonObject;
+  setPluginMetadata?(pluginId: string, metadata: JsonObject): void;
+  subscribePluginMetadata?(listener: () => void): () => void;
 }
 
 export function composerScopeIdentity(scope: PluginComposerScope): string {
@@ -82,6 +86,7 @@ interface PluginComposerViewModelInput {
   attachmentCount: number;
   isRunning: boolean;
   isSubmitting: boolean;
+  pluginMetadata?: JsonObject;
 }
 
 export function usePluginComposerViewModel({
@@ -92,6 +97,7 @@ export function usePluginComposerViewModel({
   attachmentCount,
   isRunning,
   isSubmitting,
+  pluginMetadata,
 }: PluginComposerViewModelInput): ComposerView {
   return useMemo(
     () => ({
@@ -103,9 +109,19 @@ export function usePluginComposerViewModel({
         isEmpty: isComposerDraftEmpty(text, attachmentCount),
         attachmentCount,
       },
+      experimental_pluginMetadata: pluginMetadata ?? null,
       run: { isRunning, isSubmitting },
     }),
-    [attachmentCount, experimental_selectedProviderId, isRunning, isSubmitting, layout, scope, text],
+    [
+      attachmentCount,
+      experimental_selectedProviderId,
+      isRunning,
+      isSubmitting,
+      layout,
+      pluginMetadata,
+      scope,
+      text,
+    ],
   );
 }
 

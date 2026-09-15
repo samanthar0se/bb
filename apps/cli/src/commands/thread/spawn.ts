@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import {
   jsonValueSchema,
+  validatePluginMetadata,
   PERSONAL_PROJECT_ID,
   threadVisibilitySchema,
   type GitBranchSelection,
@@ -68,6 +69,7 @@ interface ThreadSpawnCommandOptions {
   sourceSeqEnd?: string;
   visibility?: string;
   sendAt?: string;
+  pluginMetadataByPlugin?: string;
 }
 
 export function looksLikePath(value: string): boolean {
@@ -180,7 +182,10 @@ export function buildSpawnEnvironment(args: {
 
 function parseJsonFlag(
   flagValue: string | undefined,
-  flagName: "--environment-inputs" | "--machine-inputs",
+  flagName:
+    | "--environment-inputs"
+    | "--machine-inputs"
+    | "--plugin-metadata-by-plugin",
 ): JsonValue | null {
   if (flagValue === undefined) return null;
   let parsed: unknown;
@@ -375,6 +380,10 @@ export function registerSpawnCommand(
       "JSON value for an --environment-provider that declares inputs (`bb environment providers --json` shows the schema)",
     )
     .option("--send-at <when>", SEND_AT_HELP)
+    .option(
+      "--plugin-metadata-by-plugin <json>",
+      "App-origin plugin metadata map as JSON",
+    )
     .option("--origin-kind <kind>", "Thread origin: fork")
     .option("--source-thread <id>", "Source thread for a fork")
     .option(
@@ -532,13 +541,45 @@ export function registerSpawnCommand(
         }
         const sendAt =
           opts.sendAt === undefined ? undefined : parseSendAt(opts.sendAt);
+        const parsedPluginMetadata = parseJsonFlag(
+          opts.pluginMetadataByPlugin,
+          "--plugin-metadata-by-plugin",
+        );
+        let pluginMetadataByPlugin: Record<
+          string,
+          import("@bb/domain").JsonObject
+        > | null = null;
+        if (parsedPluginMetadata !== null) {
+          if (
+            opts.originKind !== undefined ||
+            opts.sourceThread !== undefined
+          ) {
+            throw new Error(
+              "--plugin-metadata-by-plugin cannot be combined with --origin-kind or --source-thread.",
+            );
+          }
+          if (
+            typeof parsedPluginMetadata !== "object" ||
+            Array.isArray(parsedPluginMetadata)
+          ) {
+            throw new Error(
+              "--plugin-metadata-by-plugin must be a JSON object keyed by plugin id.",
+            );
+          }
+          pluginMetadataByPlugin = Object.fromEntries(
+            Object.entries(parsedPluginMetadata).map(([pluginId, metadata]) => [
+              pluginId,
+              validatePluginMetadata(metadata),
+            ]),
+          );
+        }
         const providerId = opts.provider?.trim();
 
         let thread: Thread;
         try {
           const sdk = createCliBbSdk(getUrl());
           thread = await sdk.threads.spawn({
-            origin: "cli",
+            origin: pluginMetadataByPlugin === null ? "cli" : "app",
             projectId,
             ...(providerId ? { providerId } : {}),
             ...(opts.model ? { model: opts.model } : {}),
@@ -561,6 +602,11 @@ export function registerSpawnCommand(
             ...(opts.sourceThread ? { sourceThreadId: opts.sourceThread } : {}),
             ...(sourceSeqEnd !== undefined ? { sourceSeqEnd } : {}),
             ...(sendAt !== undefined ? { sendAt } : {}),
+            ...(pluginMetadataByPlugin === null
+              ? {}
+              : {
+                  experimental_pluginMetadataByPlugin: pluginMetadataByPlugin,
+                }),
           });
         } catch (err: unknown) {
           throw prependErrorContext("Failed to create thread", err);

@@ -504,6 +504,26 @@ export async function createThreadFromRequest(
       'originPluginId requires origin "plugin"',
     );
   }
+  if (
+    rawRequestInput.experimental_pluginMetadataByPlugin !== undefined &&
+    rawRequestInput.originKind !== null
+  ) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      "experimental_pluginMetadataByPlugin cannot be used with originKind",
+    );
+  }
+  if (
+    rawRequestInput.experimental_pluginMetadataByPlugin !== undefined &&
+    rawRequestInput.sourceThreadId !== undefined
+  ) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      "experimental_pluginMetadataByPlugin cannot be used with sourceThreadId",
+    );
+  }
   const pluginMetadata = resolveCreateThreadPluginMetadata(rawRequestInput);
   const requestInput = { ...rawRequestInput };
   requestInput.input = (
@@ -612,6 +632,7 @@ export async function createThreadFromRequest(
     originKind: _requestedOriginKind,
     parentThreadId: _requestedParentThreadId,
     pluginMetadata: _requestedPluginMetadata,
+    experimental_pluginMetadataByPlugin: _requestedPluginMetadataByPlugin,
     sourceThreadId: _requestedSourceThreadId,
     ...requestRest
   } = requestInput;
@@ -642,6 +663,7 @@ export async function createThreadFromRequest(
     ...(sourceThread ? { sourceThreadId: sourceThread.id } : {}),
     originKind,
     pluginMetadata,
+    experimental_pluginMetadataByPlugin: _requestedPluginMetadataByPlugin,
     visibility: resolveCreateThreadVisibility({
       parentThread,
       requestedVisibility: requestInput.visibility,

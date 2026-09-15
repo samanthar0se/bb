@@ -614,6 +614,11 @@ export function useComposer(): PluginComposerApi {
   const slotOwnershipRegistry = useContext(PluginSlotOwnershipContext);
   const composerHost = usePluginComposerHost();
   const composerHostDraft = usePluginComposerHostDraft(composerHost);
+  const pluginMetadata = useSyncExternalStore(
+    composerHost?.subscribePluginMetadata ?? (() => () => {}),
+    () => composerHost?.getPluginMetadata?.(pluginId) ?? null,
+    () => composerHost?.getPluginMetadata?.(pluginId) ?? null,
+  );
   const { projectId, threadId } = useRouteState();
   const routeScope: PromptDraftScope = useMemo(
     () =>
@@ -691,6 +696,15 @@ export function useComposer(): PluginComposerApi {
   const scopeOwnership = useMemo(
     () => createComposerScopeOwnership(scopeOwnershipKey),
     [scopeOwnershipKey],
+  );
+  const experimental_setPluginMetadata = useCallback(
+    (metadata: Record<string, import("@bb/domain").JsonValue>) => {
+      if (composerHost?.setPluginMetadata === undefined)
+        throw new Error("Plugin metadata is unsupported in this composer.");
+      if (!scopeOwnership.isActive()) return;
+      composerHost.setPluginMetadata(pluginId, metadata);
+    },
+    [composerHost, pluginId, scopeOwnership],
   );
   const { visualStateOwner, visualStateOwnerOrder } = useMemo(
     () => ({
@@ -833,9 +847,12 @@ export function useComposer(): PluginComposerApi {
           ? { kind: "thread", threadId }
           : { kind: "new-thread", projectId: projectId ?? null }),
       text: composerText,
+      experimental_pluginMetadata:
+        composerHost === null ? null : pluginMetadata,
       setText,
       updateText,
       clear,
+      experimental_setPluginMetadata,
       setTextEffect,
       setInputLock,
       setThreadRowStatus: legacySetThreadRowStatus,
@@ -847,6 +864,7 @@ export function useComposer(): PluginComposerApi {
     [
       addQuote,
       clear,
+      experimental_setPluginMetadata,
       composerScope,
       composerText,
       experimental_submit,
@@ -858,6 +876,7 @@ export function useComposer(): PluginComposerApi {
       setInputLock,
       threadId,
       updateText,
+      pluginMetadata,
     ],
   );
 }

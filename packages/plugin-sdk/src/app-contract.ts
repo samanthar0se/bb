@@ -18,6 +18,7 @@ import type {
   CreateThreadEnvironmentArgs,
 } from "@bb/server-contract";
 import type { JsonValue } from "./json-value.js";
+type JsonObject = { [key: string]: JsonValue };
 import type {
   PluginRpcCallArgs,
   PluginRpcContract,
@@ -1825,6 +1826,7 @@ export interface ComposerView {
   /** Effective provider selected in this composer, or null while unresolved. */
   experimental_selectedProviderId: string | null;
   draft: { text: string; isEmpty: boolean; attachmentCount: number };
+  readonly experimental_pluginMetadata?: Readonly<Record<string, JsonValue>> | null;
   run: { isRunning: boolean; isSubmitting: boolean };
 }
 
@@ -1893,6 +1895,7 @@ export interface PluginComposerApi {
   scope: PluginComposerScope;
   /** Current plain text for this composer scope. */
   readonly text: string;
+  readonly experimental_pluginMetadata: Readonly<Record<string, JsonValue>> | null;
   /**
    * Replace the draft's plain text. Attachments are preserved. Inline mentions
    * outside the changed range are preserved and rebased; mentions overlapped
@@ -1930,6 +1933,7 @@ export interface PluginComposerApi {
    * content should be fetched fresh when the message is sent.
    */
   insertMention(mention: PluginComposerMention): void;
+  experimental_setPluginMetadata?(metadata: JsonObject): void;
   /** Focus the composer caret at the end of the draft. */
   focus(): void;
   /**

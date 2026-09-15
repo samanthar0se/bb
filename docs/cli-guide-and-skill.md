@@ -31,6 +31,8 @@ Local installed-daemon start, stop, and uninstall operations are flags on
 
 Modal connection and machine commands are documented in [modal-sandboxes](../plugins/environment-modal-sandbox/skills/modal-sandboxes/SKILL.md). `bb modal image show [--json]` reads the Dockerfile shown in settings; `bb modal image set --file PATH [--json]` saves a validated plugin-wide override and `bb modal image reset [--json]` restores the bundled default for future machines; `bb modal account inspect --json` checks credentials; `bb machine create --provider modal-sandbox --json` automatically prepares the bundled image and installs the daemon. `bb machine remove MACHINE --yes` explicitly removes compute and private snapshots.
 
+`bb thread spawn --plugin-metadata-by-plugin <json>` supplies an app-origin JSON object keyed by plugin id; each value is a plain JSON object and the aggregate is limited to 256 KiB. Without this flag, thread spawn keeps its normal CLI attribution.
+
 `bb thread spawn --machine-inputs <json>` configures either an explicit
 `--new-machine` or the machine provider owned by a composed
 `--environment-provider`; a composition rejects separate machine selectors.

@@ -97,20 +97,26 @@ const OPTIONAL_SERVER_FIELD_GROUPS: readonly OptionalServerFieldGroup[] = [
   },
   {
     reason:
-      'originPluginId is present exactly when origin is "plugin" (enforced by refinement); omission means a non-plugin origin.',
-    fields: ["createThreadRequestSchema.originPluginId"],
+      'Origin attribution and visibility are optional at creation: originPluginId is present exactly when origin is "plugin" (enforced by refinement), while omitted visibility defaults to visible at the creation boundary.',
+    fields: [
+      "createThreadRequestSchema.originPluginId",
+      "createThreadRequestSchema.visibility",
+    ],
   },
   {
     reason:
-      "Thread creation may omit visibility for backward compatibility; the server fills visible at the creation boundary.",
-    fields: ["createThreadRequestSchema.visibility"],
-  },
-  {
-    reason:
-      'pluginMetadata is accepted only when origin is "plugin" (enforced by refinement); omission seeds no plugin namespace.',
+      'Legacy pluginMetadata is accepted only when origin is "plugin" (enforced by refinement); omission seeds no legacy plugin namespace.',
     fields: [
       "createThreadRequestSchema.pluginMetadata",
       "forkThreadRequestSchema.pluginMetadata",
+    ],
+  },
+  {
+    reason:
+      "The app-origin experimental plugin metadata map is optional; on non-fork thread creation, omission seeds no plugin namespaces.",
+    fields: [
+      "createThreadRequestSchema.experimental_pluginMetadataByPlugin",
+      "forkThreadRequestSchema.experimental_pluginMetadataByPlugin",
     ],
   },
   {

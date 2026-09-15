@@ -10,9 +10,18 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  clearPluginDraftMetadataIfCurrentMatches,
+  getAllPluginDraftMetadata,
+  getPluginDraftMetadata,
+  restorePluginDraftMetadataIfEmpty,
+  setPluginDraftMetadata,
+  subscribePluginDraftMetadata,
+} from "@/hooks/usePluginDraftMetadataStorage";
 import {
   findLocalPathProjectSourceForHost,
   PERSONAL_PROJECT_ID,
@@ -191,6 +200,10 @@ export function resolveSubmittedExecutionSources(
 
 export interface NewThreadComposerSubmission extends NewThreadRequest {
   sendAt?: number;
+  experimental_pluginMetadataByPlugin?: Record<
+    string,
+    import("@bb/domain").JsonObject
+  >;
 }
 
 export interface NewThreadComposerProps {
@@ -565,6 +578,10 @@ export function NewThreadComposer({
   const { value: storedMachineId, setValue: setStoredMachineId } =
     usePromptBoxMachinePreference(projectId);
   const [activeSeedSignature, setActiveSeedSignature] = useState(seedSignature);
+  const composerGenerationRef = useRef(seedSignature);
+  if (composerGenerationRef.current !== seedSignature) {
+    composerGenerationRef.current = seedSignature;
+  }
   const [seedOverridden, setBranchSeedOverridden] = useState(false);
   const [pickedProviderMachine, setPickedProviderMachine] = useState<{
     selectionValue: string;
@@ -1335,6 +1352,12 @@ export function NewThreadComposer({
     (options: { sendAt: number }) => submitScheduledRef.current(options),
     [],
   );
+  const metadataVersion = useSyncExternalStore(
+    (listener) =>
+      subscribePluginDraftMetadata(promptDraft.storageKey, listener),
+    () => JSON.stringify(getAllPluginDraftMetadata(promptDraft.storageKey)),
+    () => JSON.stringify(getAllPluginDraftMetadata(promptDraft.storageKey)),
+  );
   const pluginComposerHost = useMemo<PluginComposerHost>(
     () => ({
       scope: { kind: "new-thread", projectId },
@@ -1344,6 +1367,18 @@ export function NewThreadComposer({
       setDraft: promptDraft.setDraft,
       focus: focusPromptBox,
       submit: submitScheduledThroughRef,
+      getPluginMetadata: (pluginId) =>
+        composerGenerationRef.current === seedSignature
+          ? getPluginDraftMetadata(promptDraft.storageKey, pluginId)
+          : {},
+      setPluginMetadata: (pluginId, metadata) => {
+        if (composerGenerationRef.current !== seedSignature) return;
+        setPluginDraftMetadata(promptDraft.storageKey, pluginId, metadata);
+      },
+      subscribePluginMetadata: (listener) =>
+        composerGenerationRef.current === seedSignature
+          ? subscribePluginDraftMetadata(promptDraft.storageKey, listener)
+          : () => {},
     }),
     [
       focusPromptBox,
@@ -1352,7 +1387,9 @@ export function NewThreadComposer({
       promptDraft.setDraft,
       promptDraft.storageKey,
       promptDraft.subscribe,
+      seedSignature,
       submitScheduledThroughRef,
+      metadataVersion,
     ],
   );
 
@@ -1408,6 +1445,9 @@ export function NewThreadComposer({
   const submitDraft = useCallback(
     async (blockedReason: string | null, sendAt: number | null) => {
       const submittedDraft = promptDraft.getCurrent();
+      const submittedMetadata = getAllPluginDraftMetadata(
+        promptDraft.storageKey,
+      );
       const input = promptDraftToInput(submittedDraft);
       if (
         blockedReason !== null ||
@@ -1444,6 +1484,9 @@ export function NewThreadComposer({
         ),
         environment: submissionEnvironment,
         input,
+        ...(Object.keys(submittedMetadata).length > 0
+          ? { experimental_pluginMetadataByPlugin: submittedMetadata }
+          : {}),
         ...(sendAt === null ? {} : { sendAt }),
       };
       isSubmittingRef.current = true;
@@ -1451,12 +1494,22 @@ export function NewThreadComposer({
       setAttachmentError(null);
       const clearedSubmittedDraft =
         promptDraft.clearIfCurrentMatches(submittedDraft);
+      const clearedSubmittedMetadata = clearPluginDraftMetadataIfCurrentMatches(
+        promptDraft.storageKey,
+        submittedMetadata,
+      );
       try {
         await onSubmit(request);
         clearReuseEnvironment();
       } catch (submitError) {
         if (clearedSubmittedDraft) {
           promptDraft.restoreIfEmpty(submittedDraft);
+        }
+        if (clearedSubmittedMetadata) {
+          restorePluginDraftMetadataIfEmpty(
+            promptDraft.storageKey,
+            submittedMetadata,
+          );
         }
         throw submitError;
       } finally {

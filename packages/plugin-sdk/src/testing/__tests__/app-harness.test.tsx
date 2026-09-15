@@ -363,6 +363,20 @@ function ComposerProbe() {
         {view.draft.attachmentCount}
       </span>
       <span data-testid="composer-is-empty">{String(view.draft.isEmpty)}</span>
+      <span data-testid="composer-metadata">
+        {JSON.stringify(composer.experimental_pluginMetadata)}
+      </span>
+      <span data-testid="composer-view-metadata">
+        {JSON.stringify(view.experimental_pluginMetadata)}
+      </span>
+      <button
+        type="button"
+        onClick={() =>
+          composer.experimental_setPluginMetadata?.({ source: "plugin" })
+        }
+      >
+        set metadata
+      </button>
       <button type="button" onClick={() => composer.setText("replacement")}>
         replace
       </button>
@@ -1601,16 +1615,33 @@ describe("renderSlot", () => {
     expect(slot.getByTestId("thread").textContent).toBe("thr_1");
   });
 
-  it("passes the selected provider through useComposerView", () => {
+  it("injects selected provider and metadata into the composer hooks", () => {
+    const setPluginMetadata = vi.fn();
+    const metadata = { draftKind: "new-thread", revision: 3 };
     const slot = renderSlot(
       app.composerCustomizations[0]!.actions![0]!,
       {},
-      { composer: { experimental_selectedProviderId: "provider_1" } },
+      {
+        composer: {
+          experimental_selectedProviderId: "provider_1",
+          experimental_pluginMetadata: metadata,
+          experimental_setPluginMetadata: setPluginMetadata,
+        },
+      },
     );
 
     expect(slot.getByTestId("composer-selected-provider").textContent).toBe(
       "provider_1",
     );
+    expect(slot.getByTestId("composer-metadata").textContent).toBe(
+      JSON.stringify(metadata),
+    );
+    expect(slot.getByTestId("composer-view-metadata").textContent).toBe(
+      JSON.stringify(metadata),
+    );
+
+    fireEvent.click(slot.getByText("set metadata"));
+    expect(setPluginMetadata).toHaveBeenCalledWith({ source: "plugin" });
   });
 
   it("reads, replaces, functionally updates, and clears isolated composer text", () => {
