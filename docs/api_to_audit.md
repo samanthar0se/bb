@@ -1411,6 +1411,16 @@ Before stabilization, audit:
   candidate rename. Nothing under `plugins/*` sets a status today, so the
   rename is free until the prefix drops.
 
+## `PluginProviderOptionsContext.experimental_pluginMetadata`
+
+**Kept experimental (2026-08-22).** This context field exposes the owning
+plugin's per-thread metadata to its provider options hook. The snapshot is
+untrusted, user-writable, nonsecret JSON, read synchronously at every dispatch,
+deep-frozen, and `{}` when absent or corrupt; it is never automatically copied
+to provider options, the daemon wire, prompts, or logs. Audit whether this
+boundary and its size/validation semantics remain appropriate before removing
+the prefix.
+
 ## `bb.providers.register` (`experimental_bridgeOptions`, `experimental_visibility`, and the `experimental_providerBridge` artifact export)
 
 **Kept experimental (2026-08-22).** `bb.providers.register` and the declaration's target-state fields are stable. `experimental_bridgeOptions` and `experimental_visibility` have one consumer (the ACP plugin); docs/provider-plugin-api.md §1 lists both under "Still experimental on the declaration" — decide whether static options survive beside `deriveProviderOptions` before naming them. The `experimental_providerBridge` export name is an artifact contract read by the daemon bootstrap from every installed plugin; renaming it needs a dual-name acceptance window plus a protocol bump, so it stabilizes with the bridge kit once that deprecation policy exists.

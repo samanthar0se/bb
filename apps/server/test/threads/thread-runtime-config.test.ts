@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createThread,
+  insertThreadPluginMetadata,
   markThreadDeleted,
+  patchThreadPluginMetadata,
   setExperiments,
   setThreadExecutionOverride,
 } from "@bb/db";
@@ -935,50 +937,59 @@ describe("thread runtime config", () => {
     });
   });
 
-  it("runs the owning plugin's options hook with the command context", async () => {
+  it("runs each owning plugin's options hook with fresh frozen metadata", async () => {
     await withTestHarness(async (harness) => {
-      const pluginId = "provider-hooked";
-      const registration = buildPluginProviderRegistration({
-        iconHash: null,
-        available: true,
-        pluginId,
-        declaration: validatePluginProviderDeclaration({
-          id: "hooked",
-          displayName: "Hooked",
-          maintenance: { health: false, usage: false, installation: false },
-          capabilities: {
-            supportsServiceTier: false,
-            supportsNativeUserQuestion: false,
-            fork: "none",
-            supportsManualCompaction: false,
-            supportsThreadArchive: false,
-            supportsThreadRename: false,
-            permissionModes: ["accept-edits", "auto", "full"],
-            reasoningLevels: ["medium"],
-          },
-          composerActions: ["plan"],
-          deriveProviderOptions: (context) => ({
-            seen: {
-              threadId: context.threadId,
-              projectId: context.projectId,
-              model: context.model,
-              permissionMode: context.permissionMode,
-              promptMode: context.promptMode ?? null,
+      const makeRegistration = (providerId: string, ownerPluginId: string) =>
+        buildPluginProviderRegistration({
+          iconHash: null,
+          available: true,
+          pluginId: ownerPluginId,
+          declaration: validatePluginProviderDeclaration({
+            id: providerId,
+            displayName: "Hooked",
+            maintenance: { health: false, usage: false, installation: false },
+            capabilities: {
+              supportsServiceTier: false,
+              supportsNativeUserQuestion: false,
+              fork: "none",
+              supportsManualCompaction: false,
+              supportsThreadArchive: false,
+              supportsThreadRename: false,
+              permissionModes: ["accept-edits", "auto", "full"],
+              reasoningLevels: ["medium"],
             },
-            verbose: context.settings.verbose === true,
+            composerActions: ["plan"],
+            deriveProviderOptions: (context) => ({
+              derived:
+                typeof context.experimental_pluginMetadata.value === "string"
+                  ? context.experimental_pluginMetadata.value
+                  : null,
+              nestedFrozen: Object.isFrozen(
+                context.experimental_pluginMetadata.nested,
+              ),
+              arrayFrozen: Object.isFrozen(
+                context.experimental_pluginMetadata.items,
+              ),
+              topFrozen: Object.isFrozen(context.experimental_pluginMetadata),
+            }),
           }),
-        }),
-        readSettings: () => ({ verbose: true }),
-      });
-      harness.deps.providerRegistry.register({
-        ...registration,
-        pluginId,
-        iconNames: new Set<string>(),
-      });
-      harness.deps.pluginHostArtifacts.set(
-        pluginId,
-        stubHostArtifact(pluginId),
-      );
+          readSettings: () => ({ verbose: true }),
+        });
+      for (const [providerId, ownerPluginId] of [
+        ["hooked-a", "provider-hooked-a"],
+        ["hooked-b", "provider-hooked-b"],
+      ] as const) {
+        const registration = makeRegistration(providerId, ownerPluginId);
+        harness.deps.providerRegistry.register({
+          ...registration,
+          pluginId: ownerPluginId,
+          iconNames: new Set<string>(),
+        });
+        harness.deps.pluginHostArtifacts.set(
+          ownerPluginId,
+          stubHostArtifact(ownerPluginId),
+        );
+      }
 
       const { host } = seedHostSession(harness.deps, {
         id: "host-provider-hook",
@@ -993,36 +1004,59 @@ describe("thread runtime config", () => {
       const thread = seedThread(harness.deps, {
         projectId: project.id,
         environmentId: environment.id,
-        providerId: "hooked",
+        providerId: "hooked-a",
       });
-      const command = await buildThreadStartCommand(harness.deps, {
-        environment,
-        execution: {
-          model: "hook-model",
-          permissionMode: "auto",
-          reasoningLevel: "medium",
-          serviceTier: "default",
-          source: "client/turn/requested",
-        },
-        fork: null,
-        permissionEscalation: "ask",
-        input: textInput("hello"),
-        projectId: project.id,
-        providerId: "hooked",
-        requestId: encodeClientTurnRequestIdNumber({ value: 1 }),
-        syncGeneratedTitle: false,
-        thread,
+      insertThreadPluginMetadata(harness.db, {
+        threadId: thread.id,
+        pluginId: "provider-hooked-a",
+        metadata: { value: "a-one", nested: {}, items: [], raw: "raw-marker" },
       });
-
-      expect(command.options.providerOptions).toEqual({
-        seen: {
-          threadId: thread.id,
+      const dispatch = (providerId: "hooked-a" | "hooked-b") =>
+        buildThreadStartCommand(harness.deps, {
+          environment,
+          execution: {
+            model: "hook-model",
+            permissionMode: "auto",
+            reasoningLevel: "medium",
+            serviceTier: "default",
+            source: "client/turn/requested",
+          },
+          fork: null,
+          permissionEscalation: "ask",
+          input: textInput("hello"),
           projectId: project.id,
-          model: "hook-model",
-          permissionMode: "auto",
-          promptMode: null,
-        },
-        verbose: true,
+          providerId,
+          requestId: encodeClientTurnRequestIdNumber({ value: 1 }),
+          syncGeneratedTitle: false,
+          thread,
+        });
+      const first = await dispatch("hooked-a");
+      expect(first.options.providerOptions).toEqual({
+        derived: "a-one",
+        nestedFrozen: true,
+        arrayFrozen: true,
+        topFrozen: true,
+      });
+      expect(JSON.stringify(first)).not.toContain("raw-marker");
+      patchThreadPluginMetadata(harness.db, {
+        threadId: thread.id,
+        pluginId: "provider-hooked-a",
+        set: { value: "a-two" },
+        remove: [],
+      });
+      const refreshed = await dispatch("hooked-a");
+      expect(refreshed.options.providerOptions).toMatchObject({
+        derived: "a-two",
+      });
+      const switched = await dispatch("hooked-b");
+      expect(switched.options.providerOptions).toMatchObject({ derived: null });
+      const corrupt = harness.db.$client.prepare(
+        "INSERT INTO thread_plugin_metadata (thread_id, plugin_id, metadata_json) VALUES (?, ?, ?)",
+      );
+      corrupt.run(thread.id, "provider-hooked-b", "not-json");
+      const corruptCommand = await dispatch("hooked-b");
+      expect(corruptCommand.options.providerOptions).toMatchObject({
+        derived: null,
       });
     });
   });

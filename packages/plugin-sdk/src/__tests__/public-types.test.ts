@@ -5,6 +5,7 @@ import type {
   JsonValue,
   PluginAgentConfigurationContext,
   PluginEnvironmentProviderDeclaration,
+  PluginProviderOptionsContext,
   PluginEnvironments,
   ReadonlyJsonValue,
 } from "../index.js";
@@ -225,6 +226,20 @@ describe("backend plugin SDK public surface", () => {
     }
     expectTypeOf(writeMetadata).toBeFunction();
     expectTypeOf(borrowNestedValue).toBeFunction();
+  });
+
+  it("types provider metadata as deep-readonly JSON", () => {
+    expectTypeOf<
+      PluginProviderOptionsContext["experimental_pluginMetadata"]
+    >().toEqualTypeOf<{ readonly [key: string]: ReadonlyJsonValue }>();
+
+    function writeMetadata(context: PluginProviderOptionsContext): void {
+      // @ts-expect-error provider metadata is a deep-frozen snapshot
+      context.experimental_pluginMetadata.counter = 1;
+      // @ts-expect-error provider metadata is a deep-frozen snapshot
+      delete context.experimental_pluginMetadata.counter;
+    }
+    expectTypeOf(writeMetadata).toBeFunction();
   });
 
   it("keeps every backend contract export in the root declaration bundle", async () => {

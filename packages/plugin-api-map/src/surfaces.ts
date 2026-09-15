@@ -411,6 +411,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
           "ContextCategory",
           "ContextEntry",
           "PluginProviderDeclaration",
+          "PluginProviderOptionsContext",
           "PluginProviderIconRegistration",
           "ExperimentalPluginProviderEnvContext",
           "ExperimentalPluginProviderEnvEntry",
