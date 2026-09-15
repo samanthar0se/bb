@@ -30,6 +30,27 @@ describe("plugin draft metadata storage", () => {
     expect(getPluginDraftMetadata(key, "beta")).toEqual({ value: 2 });
     expect(storage.values.keys().next().value).toContain(key);
   });
+  it("returns a stable deeply immutable namespace snapshot until mutation", () => {
+    const key = `bb.promptbox.contents-draft-${Math.random()}`;
+    const empty = getPluginDraftMetadata(key, "alpha");
+    expect(getPluginDraftMetadata(key, "alpha")).toBe(empty);
+    expect(Object.isFrozen(empty)).toBe(true);
+
+    setPluginDraftMetadata(key, "alpha", {
+      nested: { values: ["one"] },
+    });
+    const populated = getPluginDraftMetadata(key, "alpha");
+    expect(getPluginDraftMetadata(key, "alpha")).toBe(populated);
+    expect(Object.isFrozen(populated)).toBe(true);
+    expect(Object.isFrozen(populated.nested)).toBe(true);
+    expect(
+      Object.isFrozen((populated.nested as { values: string[] }).values),
+    ).toBe(true);
+
+    setPluginDraftMetadata(key, "alpha", { nested: { values: ["two"] } });
+    expect(getPluginDraftMetadata(key, "alpha")).not.toBe(populated);
+  });
+
   it("isolates exact keys and reloads retained metadata", () => {
     const rootKey = "bb.promptbox.contents-draft-3";
     const otherKey = "bb.promptbox.contents-draft-other";
@@ -42,13 +63,17 @@ describe("plugin draft metadata storage", () => {
       "bb.promptbox.plugin-metadata." + otherKey,
       JSON.stringify({ alpha: { other: true } }),
     );
-    expect(getPluginDraftMetadata(rootKey, "alpha")).toEqual({ retained: true });
+    expect(getPluginDraftMetadata(rootKey, "alpha")).toEqual({
+      retained: true,
+    });
     expect(getPluginDraftMetadata(otherKey, "alpha")).toEqual({ other: true });
     storage.values.set(
       "bb.promptbox.plugin-metadata." + reloadKey,
       JSON.stringify({ alpha: { reloaded: true } }),
     );
-    expect(getPluginDraftMetadata(reloadKey, "alpha")).toEqual({ reloaded: true });
+    expect(getPluginDraftMetadata(reloadKey, "alpha")).toEqual({
+      reloaded: true,
+    });
   });
 
   it("does not publish or change the snapshot when durable writes fail", () => {

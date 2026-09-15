@@ -7,12 +7,23 @@ type Listener = () => void;
 type MetadataMap = Record<string, JsonObject>;
 const cache = new Map<string, MetadataMap>();
 const listeners = new Map<string, Set<Listener>>();
+const EMPTY_METADATA = Object.freeze({}) as JsonObject;
 
 function storageKeyForDraft(draftStorageKey: string): string {
   return `${STORAGE_PREFIX}${draftStorageKey}`;
 }
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+function freezeMetadataMap(value: MetadataMap): MetadataMap {
+  return deepFreeze(clone(value));
 }
 function read(draftStorageKey: string): MetadataMap {
   const cached = cache.get(draftStorageKey);
@@ -31,10 +42,13 @@ function read(draftStorageKey: string): MetadataMap {
         } catch {}
       }
     }
-    cache.set(draftStorageKey, result);
-    return result;
+    const snapshot = freezeMetadataMap(result);
+    cache.set(draftStorageKey, snapshot);
+    return snapshot;
   } catch {
-    return {};
+    const snapshot = Object.freeze({}) as MetadataMap;
+    cache.set(draftStorageKey, snapshot);
+    return snapshot;
   }
 }
 function emit(draftStorageKey: string): void {
@@ -54,14 +68,14 @@ function write(draftStorageKey: string, next: MetadataMap): void {
         serialized,
       );
   }
-  cache.set(draftStorageKey, clone(next));
+  cache.set(draftStorageKey, freezeMetadataMap(next));
   emit(draftStorageKey);
 }
 export function getPluginDraftMetadata(
   draftStorageKey: string,
   pluginId: string,
 ): JsonObject {
-  return clone(read(draftStorageKey)[pluginId] ?? {});
+  return read(draftStorageKey)[pluginId] ?? EMPTY_METADATA;
 }
 export function setPluginDraftMetadata(
   draftStorageKey: string,

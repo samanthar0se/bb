@@ -9,6 +9,15 @@ import {
   resetCrashedPluginSlots,
 } from "./PluginSlotMount";
 import { applyPluginCss, resetPluginCssForTest } from "@/lib/plugin-css";
+import {
+  getPluginDraftMetadata,
+  subscribePluginDraftMetadata,
+} from "@/hooks/usePluginDraftMetadataStorage";
+import {
+  PluginComposerHostProvider,
+  PluginComposerViewProvider,
+  type PluginComposerHost,
+} from "./plugin-composer-host";
 
 function Bomb(): never {
   throw new Error("kaboom");
@@ -31,6 +40,50 @@ describe("PluginSlotMount", () => {
     resetPluginCssForTest();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("keeps the project checkout slot healthy with empty draft metadata", () => {
+    const draft = { text: "", mentions: [], attachments: [] };
+    const draftStorageKey = `new-thread:project-1:${Math.random()}`;
+    const host: PluginComposerHost = {
+      scope: { kind: "new-thread", projectId: "project-1" },
+      textEffectKey: "new-thread:project-1",
+      getCurrent: () => draft,
+      subscribeDraft: () => () => {},
+      setDraft: () => {},
+      focus: () => {},
+      getPluginMetadata: (pluginId) =>
+        getPluginDraftMetadata(draftStorageKey, pluginId),
+      subscribePluginMetadata: (listener) =>
+        subscribePluginDraftMetadata(draftStorageKey, listener),
+    };
+    render(
+      <PluginComposerViewProvider
+        value={{
+          scope: host.scope,
+          layout: "expanded",
+          experimental_selectedProviderId: null,
+          draft: { text: "", isEmpty: true, attachmentCount: 0 },
+          experimental_pluginMetadata: null,
+          run: { isRunning: false, isSubmitting: false },
+        }}
+      >
+        <PluginComposerHostProvider value={host}>
+          <PluginSlotMount
+            pluginId="environment-project-checkout"
+            slotKind="environmentProviderInputs"
+            slotId="project-checkout"
+          >
+            <Healthy />
+          </PluginSlotMount>
+        </PluginComposerHostProvider>
+      </PluginComposerViewProvider>,
+    );
+
+    expect(screen.getByText("healthy slot")).toBeDefined();
+    expect(
+      screen.queryByText("plugin environment-project-checkout crashed"),
+    ).toBeNull();
   });
 
   it("collapses a throwing slot to a crash chip and keeps siblings alive", () => {
