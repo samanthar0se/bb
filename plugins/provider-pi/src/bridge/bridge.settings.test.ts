@@ -47,9 +47,10 @@ it(
       instructionMode: "append",
       options: OPTIONS,
     });
-    const providerThreadId = String((start.result as { providerThreadId?: unknown }).providerThreadId);
+    const providerThreadId = (start.result as { providerThreadId?: unknown }).providerThreadId;
+    expect(typeof providerThreadId).toBe("string");
+    if (typeof providerThreadId !== "string") throw new Error("missing providerThreadId");
     expect(providerThreadId).toMatch(/^pi_/u);
-    expect(start.result).toMatchObject({ providerThreadId });
     await harness.request(2, "turn/start", {
       threadId,
       providerThreadId,

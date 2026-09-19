@@ -33,6 +33,7 @@ describe("NewThreadPromptBoxUI", () => {
           <NewThreadPromptBoxUI
             value=""
             mentionRanges={[]}
+            mentionMenuPlacement="bottom"
             onChange={vi.fn()}
             onSubmit={vi.fn()}
             isSubmitting={false}
@@ -50,7 +51,7 @@ describe("NewThreadPromptBoxUI", () => {
                 onQueryChange: vi.fn(),
               },
               command: {
-                trigger: null,
+                triggers: [],
                 suggestions: [],
                 isLoading: false,
                 isError: false,
@@ -146,6 +147,7 @@ describe("ProjectlessMachineSlot", () => {
       primaryHostId: string | null;
     } | null;
     machineProviders?: readonly SystemMachineProvider[];
+    multiMachinePickerEnabled?: boolean;
   }) {
     return {
       value: "provider:personal-workspace",
@@ -162,6 +164,7 @@ describe("ProjectlessMachineSlot", () => {
             },
       providers: [personalWorkspaceProvider],
       machineProviders: overrides?.machineProviders,
+      multiMachinePickerEnabled: overrides?.multiMachinePickerEnabled,
       selectedProviderHostId: overrides?.selectedProviderHostId ?? host.id,
       onSelectProvider: overrides?.onSelectProvider ?? vi.fn(),
     };
@@ -260,13 +263,36 @@ describe("ProjectlessMachineSlot", () => {
 
     const trigger = screen.getByRole("button", { name: "Machine" });
     expect(trigger.textContent).toContain("Mac Studio");
-    fireEvent.pointerDown(trigger, { button: 0 });
-    fireEvent.click(screen.getByRole("menuitem", { name: /Local host/u }));
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: /Local host/u }));
 
     expect(onSelectProvider).toHaveBeenCalledWith(
       personalWorkspaceProvider,
       host.id,
     );
+  });
+
+  it("passes the experiment through to machine search", () => {
+    const manyHosts = Array.from({ length: 6 }, (_, index) =>
+      makeHost({ id: `host_${index}`, name: `Machine ${index}` }),
+    );
+    render(
+      <ProjectlessMachineSlot
+        environment={makeEnvironment({
+          machines: {
+            hosts: manyHosts,
+            localDaemonHostId: manyHosts[0]!.id,
+            primaryHostId: manyHosts[0]!.id,
+          },
+          multiMachinePickerEnabled: true,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+    expect(
+      screen.getByRole("combobox", { name: "Search machines" }),
+    ).toBeTruthy();
   });
 });
 
@@ -334,6 +360,7 @@ describe("EnvironmentSlot", () => {
     value?: string;
     providers?: readonly SystemEnvironmentProvider[];
     machineProviders?: readonly SystemMachineProvider[];
+    multiMachinePickerEnabled?: boolean;
     onSelectProvider?: (
       provider: SystemEnvironmentProvider,
       hostId: string | null,
@@ -354,6 +381,7 @@ describe("EnvironmentSlot", () => {
       selectedProviderHostId: host.id,
       onSelectProvider: overrides.onSelectProvider ?? vi.fn(),
       machineProviders: overrides.machineProviders,
+      multiMachinePickerEnabled: overrides.multiMachinePickerEnabled,
     };
   }
 
@@ -488,8 +516,8 @@ describe("EnvironmentSlot", () => {
       </QueryClientProvider>,
     );
     const trigger = screen.getAllByRole("button", { name: "Environment" })[0];
-    fireEvent.pointerDown(trigger!, { button: 0 });
-    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.click(trigger!);
+    expect(screen.getByRole("dialog", { name: "Environment" })).toBeTruthy();
 
     rerender(
       <QueryClientProvider client={queryClient}>
@@ -501,7 +529,7 @@ describe("EnvironmentSlot", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Environment" })).toBeTruthy();
     expect(document.querySelector('button[aria-label="Environment"]')).toBe(
       trigger,
     );
@@ -523,8 +551,8 @@ describe("EnvironmentSlot", () => {
       </QueryClientProvider>,
     );
     const trigger = screen.getByRole("button", { name: "Environment" });
-    fireEvent.pointerDown(trigger, { button: 0 });
-    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Environment" })).toBeTruthy();
 
     rerender(
       <QueryClientProvider client={queryClient}>
@@ -536,7 +564,7 @@ describe("EnvironmentSlot", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Environment" })).toBeTruthy();
     expect(document.querySelector('button[aria-label="Environment"]')).toBe(
       trigger,
     );

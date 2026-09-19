@@ -107,6 +107,7 @@ import {
 } from "../../internal/command-result-side-effects.js";
 import { errorMessage } from "../lib/error-log-fields.js";
 import { perDbRegistry } from "../lib/per-db-registry.js";
+import { isHostUnavailableApiError } from "../hosts/online-rpc.js";
 
 type Deps = ThreadProvisioningDeps;
 
@@ -630,6 +631,7 @@ async function runRemove(
     try {
       if (row.providerOwnsPath && row.hostId !== null && row.path !== null) {
         await runEnvironmentHook(deps, {
+          projectId: row.projectId,
           id: `environment:${environmentId}:${row.environmentProviderInstanceKey}:teardown`,
           hostId: row.hostId,
           path: row.path,
@@ -944,6 +946,11 @@ interface SettleEnvironmentProvisionOutcomeArgs extends SettleEnvironmentProvisi
 
 interface InterruptUnrecoverableEnvironmentProvisioningArgs {
   environmentId: string;
+  reason: string;
+}
+
+interface InterruptEnvironmentProvisioningForHostArgs {
+  hostId: string;
   reason: string;
 }
 
@@ -1373,7 +1380,10 @@ export function settleEnvironmentProvisionCancelCommandResult(
 }
 
 function interruptUnrecoverableEnvironmentProvisioning(
-  deps: CommandResultSideEffectsDeps,
+  deps: Pick<
+    CommandResultSideEffectsDeps,
+    "db" | "hub" | "logger" | "pendingInteractions"
+  >,
   args: InterruptUnrecoverableEnvironmentProvisioningArgs,
 ): void {
   const environment = getEnvironment(deps.db, args.environmentId);
@@ -1408,6 +1418,52 @@ function interruptUnrecoverableEnvironmentProvisioning(
   );
 }
 
+export function interruptEnvironmentProvisioningForHost(
+  deps: Pick<
+    CommandResultSideEffectsDeps,
+    "db" | "hub" | "logger" | "pendingInteractions"
+  >,
+  args: InterruptEnvironmentProvisioningForHostArgs,
+): void {
+  const environmentIds = deps.db
+    .select({ id: environments.id })
+    .from(environments)
+    .where(
+      and(
+        eq(environments.hostId, args.hostId),
+        eq(environments.status, "provisioning"),
+      ),
+    )
+    .all();
+  for (const environment of environmentIds) {
+    interruptUnrecoverableEnvironmentProvisioning(deps, {
+      environmentId: environment.id,
+      reason: args.reason,
+    });
+  }
+}
+
+export async function resumeEnvironmentProvisioningForHost(
+  deps: CommandResultSideEffectsDeps,
+  args: { hostId: string },
+): Promise<void> {
+  const environmentIds = deps.db
+    .select({ id: environments.id })
+    .from(environments)
+    .where(
+      and(
+        eq(environments.hostId, args.hostId),
+        eq(environments.status, "provisioning"),
+      ),
+    )
+    .all();
+  for (const environment of environmentIds) {
+    await advanceEnvironmentProvisioning(deps, {
+      environmentId: environment.id,
+    });
+  }
+}
+
 async function runEnvironmentProvisionCommand(
   deps: CommandResultSideEffectsDeps,
   args: StartTrackedEnvironmentProvisionCommandArgs,
@@ -1417,8 +1473,21 @@ async function runEnvironmentProvisionCommand(
     command: args.request.command,
     execution,
     hostId: args.environment.hostId,
+    preserveOnHostUnavailable: true,
     timeoutMs: LIVE_DAEMON_COMMAND_TIMEOUT_MS,
   }).catch((error) => {
+    if (error instanceof Error && isHostUnavailableApiError(error)) {
+      deps.logger.info(
+        {
+          commandType: args.request.command.type,
+          environmentId: args.environment.id,
+          executionId: execution.id,
+          hostId: args.environment.hostId,
+        },
+        "Environment provisioning waiting for host reconnect",
+      );
+      return;
+    }
     const expectedErrorFields =
       error instanceof Error
         ? expectedLiveHostCommandErrorLogFields(error)

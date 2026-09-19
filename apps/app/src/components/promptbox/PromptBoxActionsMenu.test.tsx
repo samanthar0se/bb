@@ -176,12 +176,13 @@ describe("PromptBoxActionsMenu", () => {
     });
   });
 
-  it("renders display-name groups and preserves focus deliberately moved by a plugin", async () => {
+  it("renders plugin rows without a header and preserves focus deliberately moved by a plugin", async () => {
     const focusedByPlugin = vi.fn();
     const view: ComposerView = {
       scope: { kind: "new-thread", projectId: null },
       layout: "expanded",
       experimental_selectedProviderId: null,
+      experimental_pluginMetadata: null,
       draft: { text: "draft", isEmpty: false, attachmentCount: 0 },
       run: { isRunning: false, isSubmitting: false },
     };
@@ -273,8 +274,9 @@ describe("PromptBoxActionsMenu", () => {
       "Improve prompt",
       "Rewrite prompt",
     ]);
-    expect(screen.getByText("Alpha Assistant")).toBeTruthy();
-    expect(screen.getByText("Zeta Writer")).toBeTruthy();
+    expect(screen.queryByText("Plugin")).toBeNull();
+    expect(screen.queryByText("Alpha Assistant")).toBeNull();
+    expect(screen.queryByText("Zeta Writer")).toBeNull();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Improve prompt" }));
     await waitFor(() => {

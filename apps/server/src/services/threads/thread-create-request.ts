@@ -1,6 +1,8 @@
 import type {
   JsonObject,
   PromptInput,
+  StartedOnBehalfOf,
+  ThreadCreateOrigin,
   ThreadOriginKind,
   ThreadVisibility,
 } from "@bb/domain";
@@ -9,8 +11,6 @@ import type {
   CreateThreadRequest,
   EnvironmentArgs,
   ProviderEnvironmentArgs,
-  StartedOnBehalfOf,
-  ThreadCreateOrigin,
 } from "@bb/server-contract";
 
 export interface ThreadCreateServiceRequestInput {
@@ -25,12 +25,14 @@ export interface ThreadCreateServiceRequestInput {
   input: PromptInput[];
   pluginMetadata?: CreateThreadRequest["pluginMetadata"];
   experimental_pluginMetadataByPlugin?: CreateThreadRequest["experimental_pluginMetadataByPlugin"];
+  pluginSubmission?: CreateThreadRequest["pluginSubmission"];
   sectionId?: CreateThreadRequest["sectionId"];
   model?: CreateThreadRequest["model"];
   origin: ThreadCreateOrigin | null;
   originPluginId?: CreateThreadRequest["originPluginId"];
   originKind?: ThreadOriginKind | null;
   parentThreadId?: string;
+  lifecycleOwnerThreadId?: string;
   permissionMode?: CreateThreadRequest["permissionMode"];
   projectId: string;
   providerId?: CreateThreadRequest["providerId"];
