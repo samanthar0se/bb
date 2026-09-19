@@ -668,7 +668,7 @@ function hasTerminalClientTurnRequestEvent(
   deps: ThreadCommandResultSettlementDeps,
   command: ThreadFailureCommand,
 ): boolean {
-  if (command.type !== "turn.submit") {
+  if (command.type !== "thread.start" && command.type !== "turn.submit") {
     return false;
   }
 
@@ -801,6 +801,27 @@ function recordEmptyThreadStartProviderSessionInTransaction(
   });
 }
 
+function rejectFailedThreadStartRequest(
+  deps: ThreadCommandResultSettlementDeps,
+  args: {
+    command: ThreadStartCommand;
+    errorCode: string;
+    errorMessage: string;
+  },
+): void {
+  appendThreadEventInTransaction(deps.db, {
+    threadId: args.command.threadId,
+    environmentId: args.command.environmentId,
+    type: "client/turn/rejected",
+    scope: threadScope(),
+    data: {
+      requestId: args.command.requestId,
+      reason: args.errorCode,
+      message: args.errorMessage,
+    },
+  });
+}
+
 function settleThreadCommandFailure(
   args: SettleThreadCommandFailureArgs,
 ): CommandResultSideEffectsResult {
@@ -817,6 +838,13 @@ function settleThreadCommandFailure(
   }
   if (hasTerminalClientTurnRequestEvent(args.deps, args.command)) {
     return emptyCommandResultSideEffects();
+  }
+  if (args.command.type === "thread.start") {
+    rejectFailedThreadStartRequest(args.deps, {
+      command: args.command,
+      errorCode: args.report.errorCode,
+      errorMessage: args.report.errorMessage,
+    });
   }
   if (args.command.type === "turn.submit") {
     appendThreadEventInTransaction(args.deps.db, {

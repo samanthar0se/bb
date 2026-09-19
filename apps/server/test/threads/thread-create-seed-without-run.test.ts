@@ -7,6 +7,8 @@ import {
 } from "@bb/db";
 import {
   PERSONAL_PROJECT_ID,
+  encodeClientTurnRequestIdNumber,
+  threadScope,
   turnRequestEventDataSchema,
   turnScope,
   type PermissionMode,
@@ -18,6 +20,7 @@ import { createThreadFromRequest } from "../../src/services/threads/thread-creat
 import { buildExecutionOptions } from "../../src/services/threads/thread-commands.js";
 import { canThreadSpawnChild } from "../../src/services/threads/thread-parent.js";
 import {
+  reportQueuedCommandError,
   reportQueuedCommandSuccess,
   waitForQueuedCommand,
   waitForQueuedCommandAfter,
@@ -176,6 +179,44 @@ describe("thread creation with startedOnBehalfOf (seed-without-run)", () => {
       expect(persistedFork?.sourceThreadId).toBe(sourceThread.id);
       expect(persistedFork?.parentThreadId).toBeNull();
       expect(persistedFork?.titleFallback).toBe("Continue from the fork point");
+
+      const laterRequestId = encodeClientTurnRequestIdNumber({ value: 2 });
+      seedEvent(harness.deps, {
+        threadId: fork.id,
+        environmentId: environment.id,
+        sequence: 100,
+        type: "client/turn/requested",
+        scope: threadScope(),
+        data: {
+          ...turnRequest,
+          requestId: laterRequestId,
+          input: textInput("A later request must remain pending"),
+          target: { kind: "new-turn" },
+          request: { method: "turn/start", params: {} },
+          source: "tell",
+          initiator: "user",
+          senderThreadId: null,
+        },
+      });
+
+      await reportQueuedCommandError(harness, queuedStart, {
+        errorCode: "provider_error",
+        errorMessage: "Provider thread start failed",
+      });
+      await reportQueuedCommandError(harness, queuedStart, {
+        errorCode: "provider_error",
+        errorMessage: "Provider thread start failed",
+      });
+      const rejections = listEvents(harness.db, { threadId: fork.id }).filter(
+        (event) => event.type === "client/turn/rejected",
+      );
+      expect(rejections).toHaveLength(1);
+      expect(JSON.parse(rejections[0]?.data ?? "null")).toMatchObject({
+        requestId: turnRequest.requestId,
+      });
+      expect(JSON.parse(rejections[0]?.data ?? "null")).not.toMatchObject({
+        requestId: laterRequestId,
+      });
       expect(capture).not.toHaveBeenCalledWith(
         expect.objectContaining({ name: "user_message_sent" }),
       );
