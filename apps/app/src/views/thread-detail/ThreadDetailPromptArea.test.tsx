@@ -196,6 +196,7 @@ vi.mock("@/components/promptbox/FollowUpPromptBox", async () => {
               view={{
                 scope: pluginComposerHost.scope,
                 layout: "expanded",
+                experimental_selectedProviderId: null,
                 draft: { text: "", isEmpty: true, attachmentCount: 0 },
                 run: { isRunning: false, isSubmitting: false },
               }}

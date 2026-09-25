@@ -30,6 +30,7 @@ function composerView(overrides: {
   return {
     scope: overrides.scope ?? { kind: "thread", threadId: "thr_scope" },
     layout: "expanded",
+    experimental_selectedProviderId: null,
     draft: {
       text,
       isEmpty: overrides.isEmpty ?? text.trim() === "",

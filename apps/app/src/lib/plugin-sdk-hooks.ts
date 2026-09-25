@@ -684,6 +684,7 @@ export function useComposerView(): ComposerView {
           ? { kind: "thread", threadId }
           : { kind: "new-thread", projectId: projectId ?? null }),
       layout: "expanded",
+      experimental_selectedProviderId: null,
       draft: {
         text: draft.text,
         isEmpty: isPromptDraftEmpty(draft),

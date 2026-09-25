@@ -3421,3 +3421,17 @@ remain forbidden. New-machine selections continue through creation.
 
 Stabilization requires lifecycle coverage for reuse, missing paths, cleanup in
 progress, cross-project ownership, and concurrent creation before binding.
+
+
+## `ComposerView.experimental_selectedProviderId` (`@get-bb/plugin-sdk/app`)
+
+**Kept experimental.** Reports the effective provider selected in the composer
+where the plugin is mounted. It is reactive: mounted plugins receive the
+current value after provider switches, including when a project default differs
+from the selected value. It is `null` while selection is unresolved or when the
+composer does not supply a selected-provider value. At this revision, the
+selected-provider input is wired in new-thread and follow-up composers; other
+composer surfaces report `null`. It does not expose provider metadata or server
+state.
+
+**Audit before stabilizing.** Confirm the value remains identical across new-thread, follow-up, queued-message, side-chat, and plugin-hosted composers; verify updates on provider switches and project changes; define the unresolved transition and behavior when the selected provider is unavailable; then audit consumers, rename the field project-wide, and remove this entry before dropping the experimental prefix.

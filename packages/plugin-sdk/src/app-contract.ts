@@ -2348,6 +2348,11 @@ export interface ComposerPlusMenuItem {
 export interface ComposerView {
   scope: PluginComposerScope;
   layout: "expanded" | "compact" | "zen";
+  /**
+   * Effective provider selected in this composer, or null when the composer
+   * does not supply a selection or the selection is unresolved.
+   */
+  experimental_selectedProviderId: string | null;
   draft: { text: string; isEmpty: boolean; attachmentCount: number };
   run: { isRunning: boolean; isSubmitting: boolean };
 }

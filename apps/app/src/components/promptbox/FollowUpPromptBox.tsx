@@ -199,6 +199,7 @@ function FollowUpPromptBoxStackOnly({
   const composerView = usePluginComposerViewModel({
     scope: composerScope ?? DEFAULT_COMPOSER_SCOPE,
     layout: "expanded",
+    experimental_selectedProviderId: null,
     text: hostDraft?.text ?? "",
     attachmentCount: hostDraft?.attachments.length ?? 0,
     isRunning: false,
@@ -275,6 +276,7 @@ function FollowUpPromptBoxWithComposer({
   const composerView = usePluginComposerViewModel({
     scope: composerScope ?? DEFAULT_COMPOSER_SCOPE,
     layout: composerLayout,
+    experimental_selectedProviderId: execution.provider.selectedId ?? null,
     text: composer.message,
     attachmentCount,
     isRunning: canStopRuntime || isStopping,
@@ -716,7 +718,9 @@ function FollowUpPromptBoxWithComposer({
         blurOnPointerSubmit={isCompactViewport && isPointerCoarse}
         textEffects={textEffects}
         onComposerLayoutChange={setComposerLayout}
+        experimental_selectedProviderId={execution.provider.selectedId ?? null}
         scrollToBottomOnSubmit={submitMode.kind !== "queue"}
+
         history={composer.history}
         focusEndKey={focusEndKey}
         placeholder={composer.promptPlaceholder}

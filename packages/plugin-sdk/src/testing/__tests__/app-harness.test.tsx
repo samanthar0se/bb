@@ -410,6 +410,9 @@ function ComposerProbe() {
       </span>
       <span data-testid="composer-text">{composer.text}</span>
       <span data-testid="composer-view-text">{view.draft.text}</span>
+      <span data-testid="composer-selected-provider">
+        {view.experimental_selectedProviderId ?? ""}
+      </span>
       <span data-testid="composer-attachment-count">
         {view.draft.attachmentCount}
       </span>
@@ -1796,6 +1799,18 @@ describe("renderSlot", () => {
       '::inline-vis{file="demo.html"}',
     );
     expect(slot.getByTestId("thread").textContent).toBe("thr_1");
+  });
+
+  it("passes the selected provider through useComposerView", () => {
+    const slot = renderSlot(
+      app.composerCustomizations[0]!.actions![0]!,
+      {},
+      { composer: { experimental_selectedProviderId: "provider_1" } },
+    );
+
+    expect(slot.getByTestId("composer-selected-provider").textContent).toBe(
+      "provider_1",
+    );
   });
 
   it("reads, replaces, functionally updates, and clears isolated composer text", () => {

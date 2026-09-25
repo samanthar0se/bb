@@ -109,6 +109,7 @@ describe("PromptBoxActionsMenu", () => {
     const view: ComposerView = {
       scope: { kind: "new-thread", projectId: null },
       layout: "expanded",
+      experimental_selectedProviderId: null,
       draft: { text: "draft", isEmpty: false, attachmentCount: 0 },
       run: { isRunning: false, isSubmitting: false },
     };
@@ -171,6 +172,7 @@ describe("PromptBoxActionsMenu", () => {
     const view: ComposerView = {
       scope: { kind: "new-thread", projectId: null },
       layout: "expanded",
+      experimental_selectedProviderId: null,
       draft: { text: "draft", isEmpty: false, attachmentCount: 0 },
       run: { isRunning: false, isSubmitting: false },
     };

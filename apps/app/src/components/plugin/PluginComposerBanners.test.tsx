@@ -18,6 +18,7 @@ function composerView(threadId: string, text = "") {
   return {
     scope: { kind: "thread" as const, threadId },
     layout: "expanded" as const,
+    experimental_selectedProviderId: null,
     draft: { text, isEmpty: text.length === 0, attachmentCount: 0 },
     run: { isRunning: false, isSubmitting: false },
   };

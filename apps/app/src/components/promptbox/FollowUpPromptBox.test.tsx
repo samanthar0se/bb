@@ -4,10 +4,11 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderWithoutRouter,
   screen,
   waitFor,
 } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { Profiler, startTransition, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +23,20 @@ import {
   type FollowUpSubmitMode,
 } from "@/components/promptbox/FollowUpPromptBox";
 import { makePluginRegistrationSet } from "@/test/fixtures/plugins";
+import { useComposerView } from "@/lib/plugin-sdk-hooks";
+
+function render(ui: ReactNode) {
+  return renderWithoutRouter(ui, { wrapper: MemoryRouter });
+}
+
+function SelectedProviderProbe() {
+  const view = useComposerView();
+  return (
+    <div data-testid="selected-provider">
+      {view.experimental_selectedProviderId ?? "null"}
+    </div>
+  );
+}
 
 const mocks = vi.hoisted(() => {
   const values = {
@@ -134,6 +149,7 @@ vi.mock("@/components/promptbox/PromptBoxInternal", () => ({
       }
     >
       {modeHeader}
+      <SelectedProviderProbe />
       {footerStart}
       <input
         aria-label="Follow-up prompt"
@@ -489,6 +505,47 @@ describe("FollowUpPromptBox", () => {
       .closest("[data-bb-plugin-root]");
     const queuedMessages = screen.getByTestId("queued-messages");
     expect(queuedMessages.previousElementSibling).toBe(pluginHeaderRoot);
+  });
+
+  it("passes execution provider selection through the production composer view", () => {
+    const props = createFollowUpPromptBoxProps({ kind: "ready" });
+    const draft = { text: "Follow up", mentions: [], attachments: [] };
+    const pluginComposerHost = {
+      scope: { kind: "thread" as const, threadId: "thr_test" },
+      textEffectKey: "thread:thr_test",
+      getCurrent: () => draft,
+      subscribeDraft: () => () => {},
+      setDraft: vi.fn(),
+      focus: vi.fn(),
+    };
+    const rendered = render(
+      <FollowUpPromptBox
+        {...props}
+        stack={null}
+        pluginComposerHost={pluginComposerHost}
+        pluginComposerScope={pluginComposerHost.scope}
+      />,
+    );
+    expect(screen.getByTestId("selected-provider").textContent).toBe("codex");
+
+    rendered.rerender(
+      <FollowUpPromptBox
+        {...props}
+        execution={{
+          ...props.execution,
+          provider: {
+            ...props.execution.provider,
+            selectedId: "claude-code",
+          },
+        }}
+        stack={null}
+        pluginComposerHost={pluginComposerHost}
+        pluginComposerScope={pluginComposerHost.scope}
+      />,
+    );
+    expect(screen.getByTestId("selected-provider").textContent).toBe(
+      "claude-code",
+    );
   });
 
   it("lays the banner stack on an explicit single-column track", () => {
