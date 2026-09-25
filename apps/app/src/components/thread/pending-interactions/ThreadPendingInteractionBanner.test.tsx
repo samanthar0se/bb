@@ -19,6 +19,7 @@ import {
   resetPluginFrontendBootStateForTest,
 } from "@/lib/plugin-frontend-boot-state";
 import { resetAllCrashedPluginSlotsForTest } from "../../plugin/PluginSlotMount";
+import { AppNavigationHostProvider } from "@/lib/app-navigation-host";
 import { ThreadPendingInteractionBanner } from "./ThreadPendingInteractionBanner";
 import { makePluginRegistrationSet as registrationSet } from "@/test/fixtures/plugins";
 
@@ -281,6 +282,7 @@ describe("ThreadPendingInteractionBanner request family", () => {
       "Read labels from the declaration",
     );
     expect(screen.getByText("/tmp/plans/picker.md")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open plan" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
     expect(mocks.resolveMutateAsync).toHaveBeenCalledWith(
@@ -296,6 +298,62 @@ describe("ThreadPendingInteractionBanner request family", () => {
         resolution: expect.objectContaining({ decision: "deny" }),
       }),
     );
+  });
+
+  it("opens a host plan file in the secondary panel without resolving the review", () => {
+    const openFilePreview = vi.fn(() => true);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <AppNavigationHostProvider capabilities={{ openFilePreview }}>
+            <ThreadPendingInteractionBanner
+              hostId="host_1"
+              interaction={planReview}
+              threadId="thr_1"
+            />
+          </AppNavigationHostProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expandBanner();
+    fireEvent.click(screen.getByRole("button", { name: "Open plan" }));
+    expect(openFilePreview).toHaveBeenCalledWith({
+      target: { kind: "host", hostId: "host_1", path: "/tmp/plans/picker.md" },
+      location: null,
+      viewer: "builtin",
+    });
+    expect(mocks.resolveMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps a plan with a non-absolute file path inline only", () => {
+    const relativePlan: PendingInteraction = {
+      ...planReview,
+      payload: {
+        kind: "approval",
+        reason: null,
+        availableDecisions: ["allow_once", "deny"],
+        subject: {
+          kind: "plan",
+          itemId: "plan-1",
+          plan: "# Relative",
+          planFilePath: "plans/picker.md",
+        },
+      },
+    };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <ThreadPendingInteractionBanner
+            hostId="host_1"
+            interaction={relativePlan}
+            threadId="thr_1"
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expandBanner();
+    expect(screen.getByText("plans/picker.md")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open plan" })).toBeNull();
   });
 
   it("renders a plugin request through the plugin's pendingInteraction slot, keyed by <pluginId>/<kind>", () => {

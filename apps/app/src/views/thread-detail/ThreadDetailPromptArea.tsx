@@ -2146,11 +2146,17 @@ export function ThreadDetailPromptArea({
     }
     return (
       <ThreadPendingInteractionBanner
+        hostId={environmentHostId}
         interaction={activePendingInteraction}
         threadId={thread.id}
       />
     );
-  }, [activePendingInteraction, shouldHideComposer, thread.id]);
+  }, [
+    activePendingInteraction,
+    environmentHostId,
+    shouldHideComposer,
+    thread.id,
+  ]);
   const pendingInteractionStack = useMemo(
     () => (
       <>

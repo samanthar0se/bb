@@ -1,9 +1,23 @@
-import type { ExperimentalFileLocation } from "@get-bb/plugin-sdk";
+import type {
+  ExperimentalFileLocation,
+  ExperimentalFileOpenOptions,
+} from "@get-bb/plugin-sdk";
+import { normalizeExperimentalFileOpenOptions } from "@get-bb/plugin-sdk/internal/file-navigation-validation";
 export {
   normalizeExperimentalFileOpenOptions,
   normalizeExperimentalLiveFileTarget,
 } from "@get-bb/plugin-sdk/internal/file-navigation-validation";
 import type { FilePreviewLineRange } from "@bb/client-core";
+import type { AppFilePreviewIntent } from "@/lib/app-navigation-host";
+
+export function normalizeAppFilePreviewIntent(
+  intent: AppFilePreviewIntent,
+): ExperimentalFileOpenOptions | null {
+  return normalizeExperimentalFileOpenOptions({
+    target: intent.target,
+    location: intent.location,
+  });
+}
 
 export function getExperimentalFileLocationStart(
   location: ExperimentalFileLocation | null,
