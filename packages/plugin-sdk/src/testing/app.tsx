@@ -1401,6 +1401,10 @@ export interface RenderSlotOptions<
     scope?: PluginComposerScope;
     attachmentCount?: number;
     experimental_selectedProviderId?: string | null;
+    experimental_pluginMetadata?: Readonly<Record<string, JsonValue>> | null;
+    experimental_setPluginMetadata?: (
+      metadata: Record<string, JsonValue>,
+    ) => void;
   };
   /**
    * Threads and projects `experimental_useSidebarThreads()` reports. Omitted →
@@ -1912,6 +1916,14 @@ export function renderSlot<
       return () => composerListeners.delete(listener);
     },
     api: {
+      experimental_pluginMetadata:
+        options.composer?.experimental_pluginMetadata ?? null,
+      ...(options.composer?.experimental_setPluginMetadata === undefined
+        ? {}
+        : {
+            experimental_setPluginMetadata:
+              options.composer.experimental_setPluginMetadata,
+          }),
       setText(next) {
         commitComposerText(next);
       },

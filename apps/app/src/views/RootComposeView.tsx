@@ -564,6 +564,15 @@ export function RootComposeView() {
         navigateToThreadAfterCreate,
       });
       const { sendAt, ...requestFields } = request;
+      if (
+        forkSeed !== null &&
+        Object.keys(request.experimental_pluginMetadataByPlugin ?? {}).length >
+          0
+      ) {
+        throw new Error(
+          "Plugin draft metadata is not supported when forking a thread.",
+        );
+      }
       const createRequest =
         forkSeed === null
           ? {

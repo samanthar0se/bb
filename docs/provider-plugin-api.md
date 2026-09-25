@@ -80,7 +80,8 @@ bb.providers.register({
                                  // model/list answer travels
   env: { passthrough: ["BB_CLAUDE_CODE_EXECUTABLE"] },
   deriveProviderOptions(ctx) {   // called on every command
-    // ctx: { threadId, projectId, model, permissionMode, promptMode?, settings }
+    // ctx: { threadId, projectId, model, permissionMode, promptMode?, settings,
+    //        experimental_pluginMetadata }
     return {};                   // opaque JSON handed to this plugin's bridge
   },
 })

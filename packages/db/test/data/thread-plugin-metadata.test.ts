@@ -69,6 +69,55 @@ describe("thread plugin metadata persistence", () => {
     expect(listThreadPluginMetadataRows(db, thread.id, [])).toEqual([]);
   });
 
+  it("seeds every namespace from the per-plugin metadata map", () => {
+    const { db, project } = setup("multi-seed");
+    const thread = createThread(db, noopNotifier, {
+      projectId: project.id,
+      providerId: "codex",
+      pluginMetadataByPlugin: {
+        alpha: { issue: "BB-1" },
+        beta: { ticket: 2 },
+      },
+    });
+    expect(thread.originPluginId).toBeNull();
+    expect(listThreadPluginMetadataRows(db, thread.id, ["alpha", "beta"])).toEqual([
+      { pluginId: "alpha", metadataJson: '{"issue":"BB-1"}' },
+      { pluginId: "beta", metadataJson: '{"ticket":2}' },
+    ]);
+  });
+
+  it("rolls back all rows when a later namespaced metadata insert fails", () => {
+    const { db, project } = setup("multi-rollback");
+    db.$client.exec(`
+      CREATE TRIGGER thread_plugin_metadata_second_insert_abort
+      BEFORE INSERT ON thread_plugin_metadata
+      WHEN NEW.plugin_id = 'beta'
+      BEGIN
+        SELECT RAISE(ABORT, 'second thread plugin metadata insert aborted');
+      END;
+    `);
+    expect(() =>
+      createThread(db, noopNotifier, {
+        projectId: project.id,
+        providerId: "codex",
+        title: "multi-rollback-title",
+        pluginMetadataByPlugin: {
+          alpha: { first: true },
+          beta: { second: true },
+        },
+      }),
+    ).toThrow(/second thread plugin metadata insert aborted/u);
+    expect(db.$client.prepare<[], { count: number }>(
+      "SELECT COUNT(*) AS count FROM threads WHERE title = 'multi-rollback-title'",
+    ).get()).toEqual({ count: 0 });
+    expect(db.$client.prepare<[], { count: number }>(
+      "SELECT COUNT(*) AS count FROM thread_search_segments WHERE text = 'multi-rollback-title'",
+    ).get()).toEqual({ count: 0 });
+    expect(db.$client.prepare<[], { count: number }>(
+      "SELECT COUNT(*) AS count FROM thread_plugin_metadata",
+    ).get()).toEqual({ count: 0 });
+  });
+
   it("stores no row for an empty seed", () => {
     const { db, project } = setup("empty-seed");
     const thread = createThread(db, noopNotifier, {

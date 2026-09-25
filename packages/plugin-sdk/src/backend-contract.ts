@@ -1371,6 +1371,14 @@ export interface PluginProviderOptionsContext {
    * derived into them.
    */
   settings: Readonly<Record<string, PluginSettingValue | undefined>>;
+  /**
+   * This provider plugin's own per-thread metadata, read from user-writable
+   * thread state at dispatch time. It is untrusted, nonsecret JSON; absent or
+   * corrupt metadata is exposed as an empty object.
+   */
+  experimental_pluginMetadata: {
+    readonly [key: string]: ReadonlyJsonValue;
+  };
 }
 
 /** See {@link PluginProviderDeclaration.models}. */

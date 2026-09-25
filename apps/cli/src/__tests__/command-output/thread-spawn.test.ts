@@ -553,13 +553,86 @@ describe("bb thread spawn command output", () => {
 
   it("bb thread spawn help lists product permission modes", async () => {
     const helpOutput = await getHelpOutput(["thread", "spawn"], register);
-    expect(helpOutput).toContain("--permission-mode <mode>");
-    expect(helpOutput).toContain("--visibility <visibility>");
-    expect(helpOutput).toContain("Exact Git ref");
-    expect(helpOutput).toContain("origin/<branch> for a remote ref");
-    expect(helpOutput).toContain("bb environment providers");
-    expect(helpOutput).not.toContain("bb curl");
-    expect(helpOutput).toMatch(/Permission mode: accept-edits, auto, or full/);
+    const normalizedHelp = helpOutput.replace(/\s+/gu, " ");
+    expect(normalizedHelp).toContain("--permission-mode <mode>");
+    expect(normalizedHelp).toContain("--visibility <visibility>");
+    expect(normalizedHelp).toContain("--plugin-metadata-by-plugin <json>");
+    expect(normalizedHelp).toContain("Per-plugin JSON metadata map for the new thread");
+    expect(normalizedHelp).toContain("Exact Git ref");
+    expect(normalizedHelp).toContain("origin/<branch> for a remote ref");
+    expect(normalizedHelp).toContain("bb environment providers");
+    expect(normalizedHelp).not.toContain("bb curl");
+    expect(normalizedHelp).toMatch(/Permission mode: accept-edits, auto, or full/);
+  });
+
+  it("keeps CLI attribution for spawns with or without per-plugin metadata", async () => {
+    const thread = fixtures.makeThread({
+      id: "thread-origin",
+      projectId: "proj-1",
+      providerId: "codex",
+    });
+    const requests: Array<{ json: Record<string, unknown> }> = [];
+    const post = vi.fn(async (request: { json: Record<string, unknown> }) => {
+      requests.push(request);
+      return thread;
+    });
+    stubServerApi({ "v1.threads.$post": post });
+
+    await runCommand(
+      ["thread", "spawn", "--project", "proj-1", "--prompt", "plain"],
+      register,
+    );
+    expect(post).toHaveBeenNthCalledWith(1, {
+      json: expect.objectContaining({ origin: "cli" }),
+    });
+    expect(requests[0]).toBeDefined();
+    expect(requests[0]?.json).not.toHaveProperty(
+      "experimental_pluginMetadataByPlugin",
+    );
+
+    await runCommand(
+      [
+        "thread",
+        "spawn",
+        "--project",
+        "proj-1",
+        "--prompt",
+        "seeded",
+        "--plugin-metadata-by-plugin",
+        '{"linear":{"issue":"BB-42"}}',
+      ],
+      register,
+    );
+    expect(post).toHaveBeenNthCalledWith(2, {
+      json: expect.objectContaining({
+        origin: "cli",
+        experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
+      }),
+    });
+    expect(requests[1]).toBeDefined();
+    expect(requests[1]?.json).not.toHaveProperty("originPluginId");
+  });
+
+  it.each([
+    ["--origin-kind", "fork"],
+    ["--source-thread", "source-1"],
+  ])("rejects plugin metadata with %s before making a request", async (flag, value) => {
+    const post = vi.fn();
+    const stderrWrite = vi.spyOn(console, "error").mockImplementation(() => {});
+    stubServerApi({ "v1.threads.$post": post });
+    await expect(
+      runCommand(
+        [
+          "thread", "spawn", "--project", "proj-1", "--prompt", "hello",
+          "--plugin-metadata-by-plugin", '{"linear":{"a":1}}', flag, value,
+        ],
+        register,
+      ),
+    ).rejects.toThrow("process.exit:1");
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining("cannot be combined with --origin-kind or --source-thread"),
+    );
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("bb thread spawn reports invalid permission mode choices", async () => {

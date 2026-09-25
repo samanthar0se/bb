@@ -114,6 +114,7 @@ export function createThreadRecord(
       originKind: args.request.originKind,
       originPluginId: args.request.originPluginId ?? null,
       pluginMetadata: args.request.pluginMetadata,
+      pluginMetadataByPlugin: args.request.experimental_pluginMetadataByPlugin,
       visibility: args.request.visibility,
       // Every thread starts `pending`, with no exception to parameterise.
       // Creation is unhooked and provisions nothing; admission happens at the

@@ -43,8 +43,15 @@ import {
   setPluginSlotRegistrations,
 } from "@/lib/plugin-slots";
 import { encodeReuseValue } from "@/components/pickers/environment-picker-value";
-import { useRootComposeReuseEnvironment } from "@/lib/root-compose-selection";
+import {
+  useRootComposeForkSeed,
+  useRootComposeReuseEnvironment,
+} from "@/lib/root-compose-selection";
 import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
+import {
+  getPluginDraftMetadata,
+  setPluginDraftMetadata,
+} from "@/hooks/usePluginDraftMetadataStorage";
 import { makeThreadListEntry } from "@bb/test-helpers/domain-fixtures";
 import { createDeferredPromise } from "@bb/test-helpers";
 import type { PromptDraftAttachment } from "@bb/client-core";
@@ -60,6 +67,9 @@ import {
 } from "@/lib/fixed-panel-tabs-state";
 import { PluginDetailPanelContext } from "./plugin-detail-navigation";
 import { openPluginDetailsInWorkspace } from "./plugin-detail-opener";
+import { PluginContext } from "./plugin-context";
+import { PluginComposerHostProvider } from "./plugin-composer-host";
+import { useComposer } from "@/lib/plugin-sdk-hooks";
 import { PluginNewThreadComposer } from "./PluginNewThreadComposer";
 
 function render(element: ReactNode) {
@@ -75,6 +85,7 @@ function render(element: ReactNode) {
 
 const mocks = vi.hoisted(() => ({
   promptBoxProps: [] as Array<Record<string, any>>,
+  showComposerMetadataProbes: false,
   copyAttachments: vi.fn(),
   uploadAttachment: vi.fn(),
   projectThreads: [] as ThreadListEntry[],
@@ -89,6 +100,11 @@ const mocks = vi.hoisted(() => ({
   machineProviders: [] as SystemMachineProvider[],
   modelsLoading: false,
   permissionCeiling: undefined as "accept-edits" | "auto" | "full" | undefined,
+  createThreadMutateAsync: vi.fn(),
+}));
+
+vi.mock("@/hooks/mutations/thread-runtime-mutations", () => ({
+  useCreateThread: () => ({ mutateAsync: mocks.createThreadMutateAsync }),
 }));
 
 vi.mock("@/views/RootComposePanelCommandHandlers", () => ({
@@ -134,6 +150,22 @@ vi.mock("@/components/promptbox/NewThreadPromptBox", () => ({
       <div data-testid="new-thread-prompt-box">
         {props.modeConfig?.banner ?? null}
         {props.modeConfig?.environmentProviderInputsSlot ?? null}
+        {props.pluginComposerHost ? (
+          <>
+            <button type="button" onClick={() => props.onChange("newer text", [])}>set-root-text</button>
+            <button type="button" onClick={() => props.onSubmit()}>submit-root</button>
+            <div data-testid="root-plugin-metadata">{JSON.stringify(props.pluginComposerHost.getPluginMetadata("alpha"))}</div>
+            {mocks.showComposerMetadataProbes ? (
+              <PluginComposerHostProvider value={props.pluginComposerHost}>
+                {["alpha", "beta"].map((pluginId) => (
+                  <PluginContext.Provider key={pluginId} value={pluginId}>
+                    <ComposerMetadataProbe pluginId={pluginId} />
+                  </PluginContext.Provider>
+                ))}
+              </PluginComposerHostProvider>
+            ) : null}
+          </>
+        ) : null}
       </div>
     );
   },
@@ -248,6 +280,7 @@ vi.mock("@/hooks/queries/host-queries", () => ({
 }));
 
 vi.mock("@/hooks/queries/system-queries", () => ({
+  findCachedProviderInfo: () => ({ capabilities: { supportsFork: true } }),
   useSystemProviders: () => ({ data: undefined }),
   useSystemProviderStates: () => ({ data: undefined, isPending: false }),
   useKnownProviderModelCatalogScope: () => undefined,
@@ -435,6 +468,25 @@ vi.mock("@/hooks/useQuickCreateProject", () => ({
 vi.mock("@/components/dialogs/ProjectMachineSetupDialog", () => ({
   ProjectMachineSetupDialog: () => null,
 }));
+
+function ComposerMetadataProbe({ pluginId }: { pluginId: string }) {
+  const composer = useComposer();
+  return (
+    <div>
+      <output data-testid={`metadata-${pluginId}`}>
+        {JSON.stringify(composer.experimental_pluginMetadata)}
+      </output>
+      <button
+        type="button"
+        onClick={() =>
+          composer.experimental_setPluginMetadata?.({ owner: pluginId })
+        }
+      >
+        set-{pluginId}-metadata
+      </button>
+    </div>
+  );
+}
 
 vi.mock("@/views/RootComposeSecondaryContent", () => ({
   ROOT_COMPOSE_PINNED_PANEL_TOGGLE_POSITION_CLASS: "",
@@ -674,6 +726,7 @@ describe("PluginNewThreadComposer seeding", () => {
     resetFixedPanelTabsStateForTest();
     mocks.closeTerminal.mockClear();
     mocks.promptBoxProps.length = 0;
+    mocks.showComposerMetadataProbes = false;
     mocks.promptHistoryQueryOptions.length = 0;
     mocks.copyAttachments.mockReset();
     mocks.uploadAttachment.mockReset();
@@ -829,6 +882,40 @@ describe("PluginNewThreadComposer seeding", () => {
       latestPromptBoxProps().modeConfig.environment.selectedProviderHostId,
     ).toBe("host_2");
     expect(latestPromptBoxProps().disabled).toBe(true);
+  });
+
+  it("reads and writes each plugin namespace through the real composer host", async () => {
+    mocks.showComposerMetadataProbes = true;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    renderComposer(STORED_REQUEST, () => undefined, "metadata-namespaces");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("metadata-alpha").textContent).toBe("{}");
+      expect(screen.getByTestId("metadata-beta").textContent).toBe("{}");
+    });
+    fireEvent.click(screen.getByText("set-alpha-metadata"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("metadata-alpha").textContent).toBe(
+        JSON.stringify({ owner: "alpha" }),
+      );
+    });
+    expect(screen.getByTestId("metadata-beta").textContent).toBe("{}");
+    const draftKey = getPromptDraftAccessor({
+      kind: "plugin-new-thread",
+      key: "metadata-namespaces",
+    }).storageKey;
+    expect(getPluginDraftMetadata(draftKey, "alpha")).toEqual({ owner: "alpha" });
+    expect(getPluginDraftMetadata(draftKey, "beta")).toEqual({});
+    expect(
+      consoleError.mock.calls.flat().some(
+        (argument) =>
+          typeof argument === "string" &&
+          (argument.includes("Maximum update depth exceeded") ||
+            argument.includes("getSnapshot should be cached")),
+      ),
+    ).toBe(false);
+    consoleError.mockRestore();
   });
 
   it.each(["host_deleted", "host_2"])(
@@ -1763,6 +1850,118 @@ describe("PluginNewThreadComposer seeding", () => {
     );
     consoleError.mockRestore();
     expect(updateDepthErrors).toEqual([]);
+  });
+
+  it("rejects stale plugin metadata writes after the draft generation changes", async () => {
+    const first = renderComposer(STORED_REQUEST, () => undefined, "stale-host");
+    await waitFor(() => expect(latestPromptBoxProps().disabled).toBe(false));
+    const staleHost = latestPromptBoxProps().pluginComposerHost;
+    first.rerender(
+      composerElement(
+        { ...STORED_REQUEST, model: "gpt-5.6", providerId: "codex" },
+        () => undefined,
+        "stale-host",
+      ),
+    );
+    await waitFor(() => expect(latestPromptBoxProps().disabled).toBe(false));
+    const emptyMetadata = staleHost.getPluginMetadata("alpha");
+    expect(staleHost.getPluginMetadata("alpha")).toBe(emptyMetadata);
+    act(() => staleHost.setPluginMetadata("alpha", { stale: true }));
+    const draftKey = getPromptDraftAccessor({
+      kind: "plugin-new-thread",
+      key: "stale-host",
+    }).storageKey;
+    expect(getPluginDraftMetadata(draftKey, "alpha")).toEqual({});
+    act(() => latestPromptBoxProps().pluginComposerHost.setPluginMetadata("alpha", { current: true }));
+    expect(getPluginDraftMetadata(draftKey, "alpha")).toEqual({ current: true });
+  });
+
+  it("rejects a ROOT fork with nonempty plugin metadata and preserves the draft", async () => {
+    const draft = getPromptDraftAccessor({ kind: "new-thread" });
+    draft.setDraft({ text: "fork draft", mentions: [], attachments: [] });
+    setPluginDraftMetadata(draft.storageKey, "alpha", { fork: true });
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    function ForkSeededRootComposeView() {
+      const [, setForkSeed] = useRootComposeForkSeed();
+      useEffect(() => {
+        setForkSeed({
+          environmentId: "env-source",
+          model: "gpt-5.6",
+          permissionMode: "auto",
+          projectId: "proj_1",
+          providerId: "codex",
+          reasoningLevel: "medium",
+          serviceTier: undefined,
+          sourceSeqEnd: undefined,
+          sourceThreadId: "thr_source",
+          sourceThreadTitle: "Source thread",
+        });
+      }, [setForkSeed]);
+      return <RootComposeView />;
+    }
+    const router = createMemoryRouter(
+      [{ path: "/", element: <ForkSeededRootComposeView /> }],
+      { initialEntries: ["/"] },
+    );
+    render(
+      <Provider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </Provider>,
+    );
+    await waitFor(() => expect(latestPromptBoxProps().disabled).toBe(false));
+    await act(async () => {
+      latestPromptBoxProps().onSubmit();
+    });
+    expect(mocks.createThreadMutateAsync).not.toHaveBeenCalled();
+    expect(draft.getCurrent().text).toBe("fork draft");
+    expect(getPluginDraftMetadata(draft.storageKey, "alpha")).toEqual({ fork: true });
+  });
+
+  it("captures and restores the ROOT text and plugin metadata pair without mixing newer edits", async () => {
+    let rejectRequest: ((error: Error) => void) | null = null;
+    mocks.createThreadMutateAsync.mockImplementationOnce(
+      () => new Promise((resolve, reject) => {
+        rejectRequest = reject;
+      }),
+    );
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter([{ path: "/", element: <RootComposeView /> }], { initialEntries: ["/"] });
+    render(
+      <Provider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </Provider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("new-thread-prompt-box")).toBeTruthy());
+    const draft = getPromptDraftAccessor({ kind: "new-thread" });
+    act(() => {
+      draft.setDraft({ text: "original text", mentions: [], attachments: [] });
+      setPluginDraftMetadata(draft.storageKey, "alpha", { old: true });
+    });
+    fireEvent.click(screen.getByText("submit-root"));
+    await waitFor(() => expect(mocks.createThreadMutateAsync).toHaveBeenCalled());
+    expect(mocks.createThreadMutateAsync.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        input: [{ type: "text", text: "original text", mentions: [] }],
+        experimental_pluginMetadataByPlugin: { alpha: { old: true } },
+      }),
+    );
+    fireEvent.click(screen.getByText("set-root-text"));
+    act(() => setPluginDraftMetadata(draft.storageKey, "alpha", { newer: true }));
+    await act(async () => rejectRequest?.(new Error("create failed")));
+    await waitFor(() => expect(screen.getByTestId("root-plugin-metadata").textContent).toContain("newer"));
+    expect(draft.getCurrent().text).toBe("newer text");
+    expect(getPluginDraftMetadata(draft.storageKey, "alpha")).toEqual({ newer: true });
+
+    mocks.createThreadMutateAsync.mockImplementationOnce(async () => ({ id: "thr_created" }));
+    fireEvent.click(screen.getByText("submit-root"));
+    await waitFor(() => expect(mocks.createThreadMutateAsync).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(draft.getCurrent().text).toBe(""));
   });
 
   it("ignores a repeated submit while the first submission is pending", async () => {

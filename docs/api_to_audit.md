@@ -1496,6 +1496,17 @@ Before stabilization, audit:
   candidate rename. Nothing under `plugins/*` sets a status today, so the
   rename is free until the prefix drops.
 
+## `PluginProviderOptionsContext.experimental_pluginMetadata`
+
+**Kept experimental.** This context field exposes the owning
+plugin's per-thread metadata to its provider options hook. The snapshot is
+untrusted, user-writable, nonsecret JSON, read synchronously at every dispatch,
+deep-frozen, and `{}` when absent or corrupt. The provider hook chooses which
+values to use when deriving options. A runtime test verifies that the raw
+snapshot is absent from serialized command output. Audit whether this boundary
+and its size/validation semantics remain appropriate before removing the
+prefix.
+
 ## `bb.providers.register` (`experimental_bridgeOptions`, `experimental_visibility`, and the `experimental_providerBridge` artifact export)
 
 **Kept experimental (2026-08-22).** `bb.providers.register` and the declaration's target-state fields are stable. `experimental_bridgeOptions` and `experimental_visibility` have one consumer (the ACP plugin); docs/provider-plugin-api.md §1 lists both under "Still experimental on the declaration" — decide whether static options survive beside `deriveProviderOptions` before naming them. The `experimental_providerBridge` export name is an artifact contract read by the daemon bootstrap from every installed plugin; renaming it needs a dual-name acceptance window plus a protocol bump, so it stabilizes with the bridge kit once that deprecation policy exists.
@@ -3435,3 +3446,9 @@ composer surfaces report `null`. It does not expose provider metadata or server
 state.
 
 **Audit before stabilizing.** Confirm the value remains identical across new-thread, follow-up, queued-message, side-chat, and plugin-hosted composers; verify updates on provider switches and project changes; define the unresolved transition and behavior when the selected provider is unavailable; then audit consumers, rename the field project-wide, and remove this entry before dropping the experimental prefix.
+
+## `useComposer().experimental_pluginMetadata` and `useComposer().experimental_setPluginMetadata` (`@get-bb/plugin-sdk/app`)
+
+**What it does.** New-thread composer drafts carry a persistent, per-plugin JSON object map keyed by the existing prompt draft storage key. A plugin reads and writes only its own namespace through `useComposer().experimental_pluginMetadata` and `useComposer().experimental_setPluginMetadata`; empty objects clear it. The getter is null and the setter is absent when the host does not support draft metadata. The map is submitted on new-thread creation and is not exposed in thread responses. App, CLI, and SDK requests may carry the map and retain their normal origin: CLI remains `cli`, SDK defaults to `sdk`, and SDK callers may preserve an explicit origin. Plugin-origin requests cannot use the map; their existing `pluginMetadata` seed remains limited to the owning plugin's namespace. Forks cannot carry the map.
+
+**Audit before stabilizing.** Confirm namespace ownership, reload and provider-switch isolation, aggregate 256 KiB enforcement, and coherent clear/restore behavior under concurrent draft edits. Confirm fork rejection remains clear and preserves the draft.

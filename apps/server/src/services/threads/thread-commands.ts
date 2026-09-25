@@ -1,4 +1,4 @@
-import { environments, events, threads } from "@bb/db";
+import { environments, events, getThreadPluginMetadata, threads } from "@bb/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   PromptInput,
@@ -10,6 +10,7 @@ import {
   Thread,
   ClientTurnRequestId,
   EnvironmentStatus,
+  deepFreezePluginMetadata,
   promptInputHasCommandMention,
 } from "@bb/domain";
 import {
@@ -202,13 +203,24 @@ function toRuntimeExecutionOptions(
     input: args.input,
     providerId: args.providerId,
   });
+  const registration = args.deps.providerRegistry.get(args.providerId);
+  const pluginMetadata = registration === null
+    ? {}
+    : deepFreezePluginMetadata(
+        getThreadPluginMetadata(
+          args.deps.db,
+          args.threadId,
+          registration.pluginId,
+        ).metadata,
+      );
   const providerOptions =
-    args.deps.providerRegistry.get(args.providerId)?.deriveProviderOptions({
+    registration?.deriveProviderOptions({
       threadId: args.threadId,
       projectId: args.projectId,
       model: args.execution.model,
       permissionMode,
       ...(promptMode !== undefined ? { promptMode } : {}),
+      experimental_pluginMetadata: pluginMetadata,
     }) ?? {};
   const base = {
     model: args.execution.model,

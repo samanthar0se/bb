@@ -19,6 +19,7 @@ import type {
 } from "@get-bb/plugin-sdk";
 import { isComposerDraftEmpty } from "@get-bb/plugin-sdk/internal/composer-view";
 import type { PromptDraftState } from "@bb/client-core";
+import type { JsonObject } from "@bb/domain";
 
 export interface PluginComposerHost {
   scope: PluginComposerScope;
@@ -34,6 +35,9 @@ export interface PluginComposerHost {
   setSelection?(
     selection: ExperimentalComposerSelection,
   ): Promise<ExperimentalComposerSelection>;
+  getPluginMetadata?(pluginId: string): Readonly<JsonObject>;
+  setPluginMetadata?(pluginId: string, metadata: JsonObject): void;
+  subscribePluginMetadata?(listener: () => void): () => void;
 }
 
 export function composerScopeIdentity(scope: PluginComposerScope): string {
@@ -117,7 +121,15 @@ export function usePluginComposerViewModel({
       },
       run: { isRunning, isSubmitting },
     }),
-    [attachmentCount, experimental_selectedProviderId, isRunning, isSubmitting, layout, scope, text],
+    [
+      attachmentCount,
+      experimental_selectedProviderId,
+      isRunning,
+      isSubmitting,
+      layout,
+      scope,
+      text,
+    ],
   );
 }
 

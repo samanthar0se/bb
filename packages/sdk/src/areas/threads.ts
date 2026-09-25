@@ -742,6 +742,13 @@ function spawnJson(args: ThreadSpawnArgs): CreateThreadRequest {
     ...(args.pluginMetadata === undefined
       ? {}
       : { pluginMetadata: validatePluginMetadata(args.pluginMetadata) }),
+    ...(args.experimental_pluginMetadataByPlugin === undefined
+      ? {}
+      : {
+          experimental_pluginMetadataByPlugin: Object.fromEntries(
+            Object.entries(args.experimental_pluginMetadataByPlugin).map(([pluginId, metadata]) => [pluginId, validatePluginMetadata(metadata)]),
+          ),
+        }),
     input: spawnInput(args),
     origin: origin ?? "sdk",
     startedOnBehalfOf: startedOnBehalfOf ?? null,

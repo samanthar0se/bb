@@ -95,6 +95,9 @@ export const createThreadRequestSchema = z
     originPluginId: z.string().min(1).optional(),
     pluginMetadata: pluginMetadataSchema.optional(),
     lifecycleOwnerThreadId: z.string().min(1).optional(),
+    experimental_pluginMetadataByPlugin: z
+      .record(pluginIdSchema, pluginMetadataSchema)
+      .optional(),
     visibility: threadVisibilitySchema.optional(),
     title: z.string().min(1).optional(),
     input: z.array(promptInputSchema),
@@ -123,6 +126,52 @@ export const createThreadRequestSchema = z
       .optional(),
   })
   .superRefine((value, ctx) => {
+    if (
+      value.experimental_pluginMetadataByPlugin !== undefined &&
+      value.origin === "plugin"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          'experimental_pluginMetadataByPlugin cannot be used with origin "plugin"',
+        path: ["experimental_pluginMetadataByPlugin"],
+      });
+    }
+    if (
+      value.experimental_pluginMetadataByPlugin !== undefined &&
+      new TextEncoder().encode(
+        JSON.stringify(value.experimental_pluginMetadataByPlugin),
+      ).byteLength >
+        256 * 1024
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "experimental_pluginMetadataByPlugin exceeds 256 KiB",
+        path: ["experimental_pluginMetadataByPlugin"],
+      });
+    }
+    if (
+      value.experimental_pluginMetadataByPlugin !== undefined &&
+      value.originKind !== null
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "experimental_pluginMetadataByPlugin cannot be used with originKind",
+        path: ["experimental_pluginMetadataByPlugin"],
+      });
+    }
+    if (
+      value.experimental_pluginMetadataByPlugin !== undefined &&
+      value.sourceThreadId !== undefined
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "experimental_pluginMetadataByPlugin cannot be used with sourceThreadId",
+        path: ["experimental_pluginMetadataByPlugin"],
+      });
+    }
     if (value.origin === "plugin" && value.originPluginId === undefined) {
       ctx.addIssue({
         code: "custom",

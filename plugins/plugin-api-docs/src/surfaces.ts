@@ -445,6 +445,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
         bullets: [
           "Read the draft prompt's text, whether it is empty, and how many files are attached",
           "Read the prompt box's layout and whether the thread is already running a turn",
+          "Read and set per-plugin metadata on the new-thread draft through useComposer(); app, CLI, and SDK creation retain their own origin, while plugin-origin creation keeps its single-plugin seed",
           "Read the effective provider selected in that composer, or null when unresolved or not supplied by the host",
           "Lock the input and release it again, so the draft prompt cannot change mid-operation",
           "Release locks and text effects automatically when the slot unmounts or its composer scope changes; persistent [thread row status](thread-row-status) requires an app-wide script",
@@ -530,6 +531,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
           "ContextCategory",
           "ContextEntry",
           "PluginProviderDeclaration",
+          "PluginProviderOptionsContext",
           "PluginProviderIconRegistration",
           "experimental_useProviders",
           "PluginProvidersState",

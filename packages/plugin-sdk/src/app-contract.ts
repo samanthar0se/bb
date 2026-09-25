@@ -27,6 +27,7 @@ import type {
   ThreadPluginMetadataUpdateArgs,
 } from "@bb/sdk";
 import type { JsonValue } from "./json-value.js";
+type JsonObject = { [key: string]: JsonValue };
 import type {
   PluginRpcCallArgs,
   PluginRpcContract,
@@ -2425,6 +2426,7 @@ export interface PluginComposerApi {
   scope: PluginComposerScope;
   /** Current plain text for this composer scope. */
   readonly text: string;
+  readonly experimental_pluginMetadata: Readonly<Record<string, JsonValue>> | null;
   /**
    * Replace the draft's plain text. Attachments are preserved. Inline mentions
    * outside the changed range are preserved and rebased; mentions overlapped
@@ -2466,6 +2468,7 @@ export interface PluginComposerApi {
   experimental_removeMention(mention: { provider: string; id: string }): void;
   /** Subscribe to successful local submissions in this composer scope, including accepted queued messages. Failed sends and draft clearing do not notify. Dispose on unmount. */
   experimental_onSubmitted(listener: () => void): () => void;
+  experimental_setPluginMetadata?(metadata: JsonObject): void;
   /** Focus the composer caret at the end of the draft. */
   focus(): void;
   /**

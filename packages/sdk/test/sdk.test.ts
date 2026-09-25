@@ -1210,7 +1210,10 @@ describe("@bb/sdk", () => {
   });
 
   it("fills thread spawn defaults before sending a request", async () => {
-    const queue = createFetchQueue([{ body: { id: "thr_1" }, status: 201 }]);
+    const queue = createFetchQueue([
+      { body: { id: "thr_1" }, status: 201 },
+      { body: { id: "thr_2" }, status: 201 },
+    ]);
     const sdk = createBbSdk({
       transport: createHttpTransport({
         baseUrl: "http://bb.test",
@@ -1228,9 +1231,19 @@ describe("@bb/sdk", () => {
       },
       prompt: "Ship it",
     });
+    await sdk.threads.spawn({
+      projectId: "proj_123",
+      environment: {
+        type: "host",
+        hostId: "host_123",
+        workspace: { type: "unmanaged", path: null },
+      },
+      prompt: "Seed metadata",
+      experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
+    });
 
-    expect(queue.requests[0]?.bodyText).toBe(
-      JSON.stringify({
+    expect(queue.requests.map((request) => JSON.parse(request.bodyText ?? "{}"))).toEqual([
+      {
         projectId: "proj_123",
         environment: {
           type: "host",
@@ -1241,8 +1254,21 @@ describe("@bb/sdk", () => {
         origin: "sdk",
         startedOnBehalfOf: null,
         originKind: null,
-      }),
-    );
+      },
+      {
+        projectId: "proj_123",
+        environment: {
+          type: "host",
+          hostId: "host_123",
+          workspace: { type: "unmanaged", path: null },
+        },
+        experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
+        input: [{ type: "text", text: "Seed metadata", mentions: [] }],
+        origin: "sdk",
+        startedOnBehalfOf: null,
+        originKind: null,
+      },
+    ]);
   });
 
   it("defaults thread forks to source-environment reuse and preserves an agent-only context seed", async () => {
@@ -1428,11 +1454,13 @@ describe("@bb/sdk", () => {
       },
       input: [{ type: "text", text: "From CLI", mentions: [] }],
       visibility: "hidden",
+      experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
     });
 
     expect(JSON.parse(queue.requests[0]?.bodyText ?? "{}")).toMatchObject({
       origin: "cli",
       visibility: "hidden",
+      experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
     });
   });
 

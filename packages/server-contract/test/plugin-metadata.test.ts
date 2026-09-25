@@ -76,6 +76,93 @@ describe("plugin metadata contracts", () => {
     ).toEqual([{ message: ORIGIN_MESSAGE, path: ["pluginMetadata"] }]);
   });
 
+  it("rejects per-plugin draft metadata on forks as an unknown request field", () => {
+    const result = forkThreadRequestSchema.safeParse({
+      ...forkBase,
+      experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map(({ message }) => message).join(" ")).toContain(
+        "experimental_pluginMetadataByPlugin",
+      );
+    }
+  });
+
+  it("accepts per-plugin draft metadata for app, CLI, and SDK creation", () => {
+    const metadata = { linear: { issue: "BB-42" } };
+
+    for (const origin of ["app", "cli", "sdk"] as const) {
+      expect(
+        createThreadRequestSchema.parse({
+          ...createBase,
+          origin,
+          originPluginId: undefined,
+          experimental_pluginMetadataByPlugin: metadata,
+        }).experimental_pluginMetadataByPlugin,
+      ).toEqual(metadata);
+    }
+  });
+
+  it("rejects per-plugin draft metadata for plugin-origin creation", () => {
+    expect(
+      issuesOf(
+        createThreadRequestSchema.safeParse({
+          ...createBase,
+          experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
+        }),
+      ),
+    ).toEqual([
+      {
+        message:
+          'experimental_pluginMetadataByPlugin cannot be used with origin "plugin"',
+        path: ["experimental_pluginMetadataByPlugin"],
+      },
+    ]);
+  });
+
+  it.each([
+    ["originKind", { originKind: "fork" }],
+    ["sourceThreadId", { sourceThreadId: "source" }],
+  ])("rejects per-plugin draft metadata with %s", (_field, forkFields) => {
+    expect(
+      createThreadRequestSchema.safeParse({
+        ...createBase,
+        origin: "sdk",
+        originPluginId: undefined,
+        experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
+        ...forkFields,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps aggregate size and JSON validation for per-plugin draft metadata", () => {
+    const largeMetadata = {
+      linear: { content: "a".repeat(140 * 1024) },
+      slack: { content: "b".repeat(140 * 1024) },
+    };
+
+    expect(
+      createThreadRequestSchema.safeParse({
+        ...createBase,
+        origin: "sdk",
+        originPluginId: undefined,
+        experimental_pluginMetadataByPlugin: largeMetadata,
+      }).success,
+    ).toBe(false);
+    expect(
+      createThreadRequestSchema.safeParse({
+        ...createBase,
+        origin: "sdk",
+        originPluginId: undefined,
+        experimental_pluginMetadataByPlugin: {
+          linear: { issue: Number.NaN },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects pluginMetadata with a malformed originPluginId", () => {
     for (const originPluginId of ["Linear ", "../x"]) {
       expect(
