@@ -232,7 +232,7 @@ import {
 import { openAppFixedTabFromDestinations } from "@/lib/app-fixed-tab-navigation";
 import {
   getFileBasename,
-  normalizeExperimentalFileOpenOptions,
+  normalizeAppFilePreviewIntent,
   toFilePreviewLineRange,
 } from "@/lib/live-file-navigation";
 import { getFilePreviewLineRangeStart } from "@bb/client-core";
@@ -1344,7 +1344,7 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
   );
   const handleOpenLiveFilePreview = useCallback(
     (intent: AppFilePreviewIntent): boolean => {
-      const normalized = normalizeExperimentalFileOpenOptions(intent);
+      const normalized = normalizeAppFilePreviewIntent(intent);
       if (normalized === null || thread === undefined) return false;
       const lineRange = toFilePreviewLineRange(normalized.location);
       const options =

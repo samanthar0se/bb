@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  normalizeAppFilePreviewIntent,
   normalizeExperimentalFileOpenOptions,
   normalizeExperimentalLiveFileTarget,
   toFilePreviewLineRange,
@@ -143,5 +144,25 @@ describe("normalizeExperimentalFileOpenOptions", () => {
     expect(
       toFilePreviewLineRange({ kind: "line", line: 42, column: 7 }),
     ).toEqual({ startLineNumber: 42, endLineNumber: 42 });
+  });
+});
+
+describe("normalizeAppFilePreviewIntent", () => {
+  it("accepts an app intent that names a viewer and still rejects an invalid target", () => {
+    const target = { kind: "host", hostId: "host_1", path: "/tmp/plan.md" };
+    expect(
+      normalizeAppFilePreviewIntent({
+        target: { kind: "host", hostId: "host_1", path: "/tmp/plan.md" },
+        location: null,
+        viewer: "builtin",
+      }),
+    ).toEqual({ target, location: null });
+    expect(
+      normalizeAppFilePreviewIntent({
+        target: { kind: "host", hostId: "host_1", path: "tmp/plan.md" },
+        location: null,
+        viewer: "builtin",
+      }),
+    ).toBeNull();
   });
 });

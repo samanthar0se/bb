@@ -38,9 +38,12 @@ import {
 } from "@/components/thread/timeline/presentation-display";
 import { PluginCompactIconMask } from "@/components/plugin/PluginIcon";
 import { usePluginIconUrl } from "@/lib/plugin-logos";
+import { useAppNavigationHost } from "@/lib/app-navigation-host";
+import { normalizeExperimentalLiveFileTarget } from "@/lib/live-file-navigation";
 import { cn } from "@bb/shared-ui/lib/utils";
 
 interface ThreadPendingInteractionBannerProps {
+  hostId?: string;
   interaction: PendingInteraction;
   sourceThread?: PendingInteractionSourceThread;
   threadId: string;
@@ -103,6 +106,7 @@ export function ThreadPendingInteractionBanner(
 }
 
 function PendingInteractionBanner({
+  hostId,
   interaction,
   sourceThread,
   threadId,
@@ -132,6 +136,7 @@ function PendingInteractionBanner({
     case "plan_review":
       return (
         <PlanReviewRequestBanner
+          hostId={hostId}
           interaction={interaction}
           request={request}
           sourceThread={sourceThread}
@@ -163,6 +168,7 @@ function PendingInteractionBanner({
 }
 
 interface PlanReviewRequestBannerProps {
+  hostId?: string;
   interaction: PendingInteraction;
   request: Extract<InteractionRequestView, { kind: "plan_review" }>;
   sourceThread?: PendingInteractionSourceThread;
@@ -205,6 +211,7 @@ function useApprovalDecisionSubmission({
 }
 
 function PlanReviewRequestBanner({
+  hostId,
   interaction,
   request,
   sourceThread,
@@ -216,8 +223,17 @@ function PlanReviewRequestBanner({
       interaction,
       threadId,
     });
+  const { openFilePreview } = useAppNavigationHost();
   const { approval } = request;
   const { plan, planFilePath } = request.review;
+  const planFileTarget =
+    hostId && planFilePath
+      ? normalizeExperimentalLiveFileTarget({
+          kind: "host",
+          hostId,
+          path: planFilePath,
+        })
+      : null;
   return (
     <PendingInteractionShell
       label="Plan review"
@@ -250,9 +266,29 @@ function PlanReviewRequestBanner({
             <MarkdownPreview content={plan} className="text-xs" />
           </div>
           {planFilePath ? (
-            <p className="truncate border-t border-border px-3 py-2 font-mono text-xs text-muted-foreground">
-              {planFilePath}
-            </p>
+            <div className="flex items-center gap-2 border-t border-border py-1 pl-3 pr-1">
+              <p className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                {planFilePath}
+              </p>
+              {planFileTarget ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0"
+                  onClick={() =>
+                    openFilePreview({
+                      target: planFileTarget,
+                      location: null,
+                      viewer: "builtin",
+                    })
+                  }
+                >
+                  <Icon name="Maximize2" className="size-3" />
+                  Open plan
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       )}
