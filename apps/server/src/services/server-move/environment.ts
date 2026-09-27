@@ -1,4 +1,5 @@
 import { statfs } from "node:fs/promises";
+import type { AppSurface } from "@bb/config/app-surface";
 import type { ServerBindHost } from "@bb/config/server";
 import type {
   AppDeps,
@@ -13,10 +14,7 @@ import type {
   ServerMoveTimings,
 } from "./coordinator.js";
 import { exportServerArchive } from "./export.js";
-import {
-  createFullBbAppArtifactService,
-  runPackCommand,
-} from "./full-artifact.js";
+import { createFullBbAppArtifactService } from "./full-artifact.js";
 import { CONNECT_PLUGIN_SOURCE, resolveServerMoveMode } from "./mode.js";
 import { stopRunningServerWork } from "./stop-work.js";
 
@@ -40,6 +38,7 @@ export const SERVER_MOVE_TIMINGS: ServerMoveTimings = {
 };
 
 export interface CreateDefaultServerMoveEnvironmentArgs {
+  appSurface: AppSurface;
   bindHost: ServerBindHost | null;
   deps: AppDeps;
   env: NodeJS.ProcessEnv;
@@ -122,7 +121,6 @@ export function createDefaultServerMoveEnvironment(
         workDir: exportArgs.workDir,
       }),
     fullArtifact: createFullBbAppArtifactService({
-      commandRunner: runPackCommand,
       dataDir: deps.config.dataDir,
       serverEntryUrl: args.serverEntryUrl,
     }),
@@ -151,6 +149,7 @@ export function createDefaultServerMoveEnvironment(
     },
     resumeDeferredWork: () => resumeServerMoveDeferredWork(deps),
     retireProcess: args.retireProcess,
+    serverAppSurface: args.appSurface,
     serverTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     stopRunningWork: (stopArgs) => stopRunningServerWork(deps, stopArgs),
     targetServerPort: () => targetPortOverride ?? deps.config.serverPort,

@@ -124,6 +124,13 @@ export const createThreadRequestSchema = z
     pluginSubmission: z
       .object({ pluginId: pluginIdSchema, data: jsonValueSchema })
       .optional(),
+    /**
+     * `true` ⇒ the thread is created as a draft: it stays `pending`, nothing
+     * is dispatched or provisioned, and `input` becomes the thread's draft
+     * instead of its first message. Sending a message to the thread later
+     * starts it and clears the draft.
+     */
+    draft: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     if (
@@ -170,6 +177,29 @@ export const createThreadRequestSchema = z
           "experimental_pluginMetadataByPlugin cannot be used with sourceThreadId",
         path: ["experimental_pluginMetadataByPlugin"],
       });
+    }
+    if (value.draft === true) {
+      for (const field of [
+        "sendAt",
+        "pluginSubmission",
+        "sourceThreadId",
+        "sourceSeqEnd",
+      ] as const) {
+        if (value[field] !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message: `${field} cannot be combined with draft`,
+            path: [field],
+          });
+        }
+      }
+      if (value.originKind !== null) {
+        ctx.addIssue({
+          code: "custom",
+          message: "originKind cannot be combined with draft",
+          path: ["originKind"],
+        });
+      }
     }
     if (value.origin === "plugin" && value.originPluginId === undefined) {
       ctx.addIssue({
@@ -432,6 +462,15 @@ export type CreateQueuedMessageRequest = z.infer<
   typeof createQueuedMessageRequestSchema
 >;
 
+export const updateThreadDraftRequestSchema = z
+  .object({
+    input: z.array(promptInputSchema),
+  })
+  .strict();
+export type UpdateThreadDraftRequest = z.infer<
+  typeof updateThreadDraftRequestSchema
+>;
+
 export const updateQueuedMessageRequestSchema = z.object({
   expectedUpdatedAt: z.number().int().nonnegative(),
   input: z.array(promptInputSchema).min(1),
@@ -542,6 +581,15 @@ export type ThreadSearchResponse = z.infer<typeof threadSearchResponseSchema>;
 
 export const threadResponseSchema = threadWithRuntimeSchema.extend({
   activeBackgroundAgentCount: z.number().int().nonnegative(),
+  /**
+   * Whether `POST /threads/:id/restore-environment` would build this thread a
+   * replacement workspace right now. True only for a live, settled thread whose
+   * environment was destroyed while the provider that created it is still here
+   * and restores environments, and the machine it stood on is still here — so a
+   * surface can offer the action instead of discovering the refusal by making
+   * the call.
+   */
+  canRestoreEnvironment: z.boolean(),
   canSpawnChild: z.boolean(),
   // How many messages are waiting on this thread's queue right now — waiting on
   // the clock, on the running turn, on provisioning, on an interaction, or on
@@ -549,6 +597,10 @@ export const threadResponseSchema = threadWithRuntimeSchema.extend({
   // `GET /threads/:id/queued-messages` supplies the reasons once a surface
   // actually renders them.
   queuedMessageCount: z.number().int().nonnegative(),
+  // The thread's saved, unsent composer message, or null when it has none. A
+  // draft thread is a `pending` thread whose first message lives here until it
+  // is sent; sending any message to the thread clears it.
+  draft: z.array(promptInputSchema).nullable(),
 });
 export type ThreadResponse = z.infer<typeof threadResponseSchema>;
 
@@ -608,6 +660,7 @@ export type UpdateThreadPluginMetadataRequest = z.infer<
 export const threadWithIncludesResponseSchema = threadResponseSchema.extend({
   environment: environmentSchema.nullable().optional(),
   host: hostSchema.nullable().optional(),
+  environmentHostName: z.string().nullable().optional(),
 });
 export type ThreadWithIncludesResponse = z.infer<
   typeof threadWithIncludesResponseSchema
@@ -661,6 +714,7 @@ export type ThreadQueuedMessageListResponse = z.infer<
 
 export const threadChildSummaryResponseSchema = z.object({
   nonDeletedChildCount: z.number().int().nonnegative(),
+  unarchivedDescendantCount: z.number().int().nonnegative(),
 });
 export type ThreadChildSummaryResponse = z.infer<
   typeof threadChildSummaryResponseSchema
@@ -813,6 +867,7 @@ export type ThreadArchiveAllResponse = z.infer<
 export const threadListQuerySchema = z.object({
   projectId: z.string().min(1).optional(),
   environmentId: z.string().min(1).optional(),
+  hostId: z.string().min(1).optional(),
   parentThreadId: z.string().min(1).optional(),
   sourceThreadId: z.string().min(1).optional(),
   archived: z.enum(["true", "false"]).optional(),

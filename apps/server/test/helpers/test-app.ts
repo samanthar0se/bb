@@ -1,4 +1,5 @@
 import { installDefaultEnvironmentProviders } from "./environment-provider.js";
+import { registerTestHarnessWarmup } from "./test-harness-warmup.js";
 import { setPluginEnvironmentProviderBridge } from "../../src/services/plugins/plugin-environment-provider-registry.js";
 import { clearAllThreadProvisionSchedules } from "../../src/services/threads/thread-startup-store.js";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -6,7 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
-import { createConnection, getAppSettings, type DbConnection } from "@bb/db";
+import {
+  createConnection,
+  getAppSettings,
+  listRunningThreads,
+  type DbConnection,
+} from "@bb/db";
 import { defaultFeatureFlags } from "@bb/domain";
 import { initDb } from "../../src/db.js";
 import { createApp } from "../../src/server.js";
@@ -21,6 +27,10 @@ import { SkillTreeRegistry } from "../../src/services/skills/injected-skills.js"
 import { PluginHostArtifactRegistry } from "../../src/services/plugins/plugin-host-artifact-registry.js";
 import { createProviderNativeRootsCache } from "../../src/services/providers/native-roots.js";
 import { createAiServiceRegistry } from "../../src/services/ai/ai-service-registry.js";
+import {
+  createAppUpdateService,
+  type AppUpdateService,
+} from "../../src/services/system/app-update.js";
 import {
   createAppVersionService,
   type AppVersionService,
@@ -42,6 +52,7 @@ import {
 
 const TEST_MACHINE_KEY_PREFIX = "test-daemon-key";
 const TEST_SERVER_HOST = "127.0.0.1";
+const TEST_TERMINAL_RPC_TIMEOUT_MS = 10_000;
 
 export interface TestAppHarness {
   app: ReturnType<typeof createApp>["app"];
@@ -75,8 +86,11 @@ export async function installTestBuiltinPlugin(
 }
 
 export type TestAppHarnessConfigOverrides = Partial<ServerRuntimeConfig> & {
+  appUpdateService?: AppUpdateService;
   appVersionService?: AppVersionService;
+  terminalAttachTimeoutMs?: number;
   terminalCloseTimeoutMs?: number;
+  terminalOpenTimeoutMs?: number;
   nativeRootsClock?: () => number;
   seedFirstPartyProviders?: boolean;
   extraProviders?: readonly {
@@ -139,8 +153,11 @@ export async function createTestAppHarness(
   overrides: TestAppHarnessConfigOverrides = {},
 ): Promise<TestAppHarness> {
   const {
+    appUpdateService,
     appVersionService,
+    terminalAttachTimeoutMs = TEST_TERMINAL_RPC_TIMEOUT_MS,
     terminalCloseTimeoutMs,
+    terminalOpenTimeoutMs = TEST_TERMINAL_RPC_TIMEOUT_MS,
     nativeRootsClock,
     seedFirstPartyProviders = true,
     ...configOverrides
@@ -212,18 +229,14 @@ export async function createTestAppHarness(
     hostDaemonPort: 3001,
     marketplaceUrl: "https://marketplace.invalid/marketplace.json",
     inheritedSkillsRootPaths: [],
-    inferenceFallbackModel: "test/mock-fallback-model",
-    inferenceModel: "test/mock-model",
     isDevelopment: true,
-    openAiApiKey: "test-openai-key",
     serverPort: 3334,
     sharedSkillRoots: { user: [], project: [] },
-    transcriptionModel: "test/mock-transcription",
     appUrl: "https://bb.example.test",
     ...configOverrides,
   };
   const terminalSessions = new TerminalSessionLifecycle({
-    attachTimeoutMs: 50,
+    attachTimeoutMs: terminalAttachTimeoutMs,
     ...(terminalCloseTimeoutMs === undefined
       ? {}
       : { closeTimeoutMs: terminalCloseTimeoutMs }),
@@ -231,7 +244,7 @@ export async function createTestAppHarness(
     db,
     hub,
     logger,
-    openTimeoutMs: 50,
+    openTimeoutMs: terminalOpenTimeoutMs,
   });
   const bbAppManagedConfig = await createBbAppManagedConfigReloader({
     config,
@@ -263,7 +276,20 @@ export async function createTestAppHarness(
       config,
       logger,
     });
+  const appUpdate =
+    appUpdateService ??
+    createAppUpdateService({
+      appSurface: "web",
+      appVersion,
+      config,
+      countRunningThreads: () => listRunningThreads(db).length,
+      launcher: null,
+      logger,
+      mode: null,
+      notifyChanged: () => hub.notifySystem(["app-update-changed"]),
+    });
   const deps: ServerAppDeps = {
+    appUpdate,
     appVersion,
     bbAppManagedConfig,
     config,
@@ -301,7 +327,12 @@ export async function createTestAppHarness(
       clearAllThreadProvisionSchedules();
       setPluginEnvironmentProviderBridge(undefined);
       await pluginService.stop();
-      await rm(dataDir, { recursive: true, force: true });
+      await rm(dataDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50,
+      });
     },
   };
 }
@@ -332,6 +363,8 @@ export async function withTestHarness<T>(
     await harness.cleanup();
   }
 }
+
+registerTestHarnessWarmup(() => withTestHarness(async () => undefined));
 
 export async function startTestServer(
   overrides: TestAppHarnessConfigOverrides = {},

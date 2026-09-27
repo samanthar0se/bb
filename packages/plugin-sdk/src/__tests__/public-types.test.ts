@@ -20,6 +20,7 @@ type ExpectedBbPluginApiKey =
   | "experimental_environments"
   | "experimental_hooks"
   | "experimental_machines"
+  | "onInstall"
   | "experimental_serverAccess"
   | "hosts"
   | "http"
@@ -41,9 +42,11 @@ const EXPECTED_BACKEND_ROOT_TYPE_EXPORTS = [
   "MessageDispatchHookContext",
   "MessageDispatchHookDecision",
   "PluginAgents",
+  "PluginAiCompleteOptions",
   "PluginAiServiceDeclaration",
-  "PluginAiServiceKind",
+  "PluginAiServiceStatus",
   "PluginAiServices",
+  "PluginAiTranscribeOptions",
   "PluginAgentConfiguration",
   "PluginAgentConfigurationContext",
   "PluginAgentToolContentPart",
