@@ -5,6 +5,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -703,6 +704,45 @@ describe("acp bridge", () => {
         },
       ],
       selectedOnlyModels: [],
+    });
+  });
+
+  it("keeps probing reasoning for later models after one model's probe fails", async () => {
+    const modelListId = sendModelList({
+      envVars: {
+        FAKE_ACP_MODEL_CONFIG: "1",
+        FAKE_ACP_THOUGHT_LEVEL_CONFIG: "1",
+        FAKE_ACP_MODEL_COUNT: "3",
+        FAKE_ACP_SET_CONFIG_MODEL_ERROR_VALUE: "fake/strong",
+      },
+    });
+
+    expect((await waitForResponse(modelListId)).result).toMatchObject({
+      models: [
+        {
+          id: "fake/default",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium" }],
+        },
+        {
+          id: "fake/strong",
+          supportedReasoningEfforts: [
+            {
+              reasoningEffort: "medium",
+              description:
+                "Reasoning effort is managed by the connected ACP agent.",
+            },
+          ],
+        },
+        {
+          id: "fake/gen-2",
+          defaultReasoningEffort: "low",
+          supportedReasoningEfforts: [
+            { reasoningEffort: "low" },
+            { reasoningEffort: "medium" },
+            { reasoningEffort: "high" },
+          ],
+        },
+      ],
     });
   });
 
@@ -1457,20 +1497,6 @@ describe("acp bridge", () => {
     ]);
   });
 
-  it("does not leak bridge-only Electron env to the spawned agent", async () => {
-    vi.stubEnv("ELECTRON_RUN_AS_NODE", "1");
-    const { providerThreadId } = await startThread();
-
-    sendTurnRequest("turn/start", providerThreadId, {
-      input: [
-        { type: "text", text: "echo-electron-run-as-node", mentions: [] },
-      ],
-    });
-    await waitForTurnCompleted();
-
-    expect(agentMessageTexts()).toContain("electron-run-as-node:missing");
-  });
-
   it("preserves Electron Node mode for the dynamic-tool MCP process only", async () => {
     vi.stubEnv("ELECTRON_RUN_AS_NODE", "1");
     const { providerThreadId } = await startThread({
@@ -1512,13 +1538,15 @@ describe("acp bridge", () => {
         { type: "text", text: "echo-electron-run-as-node", mentions: [] },
       ],
     });
-    await waitFor(
-      () =>
-        agentMessageTexts().find(
-          (text) => text === "electron-run-as-node:missing",
-        ),
-      "agent environment report",
-    );
+    await expect(
+      waitFor(
+        () =>
+          agentMessageTexts().find((text) =>
+            text.startsWith("electron-run-as-node:"),
+          ),
+        "agent environment report",
+      ),
+    ).resolves.toBe("electron-run-as-node:missing");
   });
 
   it("warns and launches the family id when a reasoning variant is missing", async () => {
@@ -2275,8 +2303,11 @@ describe("acp bridge", () => {
     expect(agentMessageTexts()).toContain("permission:always");
   });
 
-  it("performs client fs writes inside the workspace and reports them", async () => {
+  it.each(["add", "update"])("acknowledges fs %s writes", async (kind) => {
     const targetPath = join(workspaceDir, "agent-output.txt");
+    if (kind === "update") {
+      writeFileSync(targetPath, "original content\n");
+    }
     const { providerThreadId } = await startThread({
       permissionMode: "accept-edits",
       permissionEscalation: "ask",
@@ -2295,7 +2326,7 @@ describe("acp bridge", () => {
     ).toContainEqual(
       expect.objectContaining({
         type: "fileChange",
-        changes: [expect.objectContaining({ path: targetPath, kind: "add" })],
+        changes: [expect.objectContaining({ path: targetPath, kind })],
       }),
     );
   });
@@ -3038,6 +3069,42 @@ describe("acp bridge", () => {
     const forkIdentities = identityIndexesFor("thread-fork-reset");
     expect(forkResets).toHaveLength(1);
     expect(forkResets[0]).toBeGreaterThan(forkIdentities[0] ?? Infinity);
+  });
+
+  it("surfaces Grok context window size and prompt usage from session _meta", async () => {
+    const { bbThreadId, providerThreadId } = await startThread({
+      dialectId: "grok",
+      envVars: { FAKE_ACP_GROK_CONTEXT: "1" },
+    });
+
+    expect(contextWindowDeltasFor(bbThreadId)).toEqual([
+      { used: 0, size: 500_000 },
+    ]);
+
+    sendTurnRequest("turn/start", providerThreadId, {
+      input: [{ type: "text", text: "hello", mentions: [] }],
+    });
+    await waitForTurnCompleted();
+
+    expect(contextWindowDeltasFor(bbThreadId)).toEqual([
+      { used: 0, size: 500_000 },
+      { used: 17_504, size: 500_000 },
+    ]);
+  });
+
+  it("ignores Grok-shaped session _meta on other ACP dialects", async () => {
+    const { bbThreadId, providerThreadId } = await startThread({
+      envVars: { FAKE_ACP_GROK_CONTEXT: "1" },
+    });
+
+    expect(contextWindowDeltasFor(bbThreadId)).toEqual([]);
+
+    sendTurnRequest("turn/start", providerThreadId, {
+      input: [{ type: "text", text: "hello", mentions: [] }],
+    });
+    await waitForTurnCompleted();
+
+    expect(contextWindowDeltasFor(bbThreadId)).toEqual([]);
   });
 
   it("holds an agent update written with the session/new response until thread/identity is out", async () => {

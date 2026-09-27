@@ -3,12 +3,79 @@
 - `pnpm dev` prints the active frontend URL, server API URL, host daemon port, data dir, and logs dir. Do not assume fixed dev ports.
 - `pnpm start:worktree` builds production artifacts and serves the optimized app bundle from the checkout-specific dev server URL, while keeping the same dev data directory and deterministic server/host-daemon ports. It has no Vite dev server or hot reload.
 - `pnpm start:worktree-remote` is the trusted-network variant of `pnpm start:worktree`; it binds that server to all IPv4 interfaces.
+- `pnpm desktop` packages the Electron app and launches it against the installed data directory, ports and Electron user-data directory, the same targets a released build uses. It therefore shares the single-instance lock with an installed bb: quit that first, or the launch focuses it instead of starting your build.
+- `pnpm desktop:worktree` packages and launches it against this checkout's data directory and deterministic ports, the same instance `pnpm start:worktree` uses, so a packaged build never touches `~/.bb` or port 38886. It also points Electron's own user-data directory at `$BB_DATA_DIR/desktop` — window state, storage and the single-instance lock all live there. Without that the build would share `~/Library/Application Support/bb` with an installed bb, fail to take the lock, and quit while the installed app focuses itself, which reads as a successful launch of code that never ran. Override it with `BB_DESKTOP_USER_DATA_DIR`. It refuses to start when the server or host-daemon port is busy, because a stale server there would answer for the build you meant to test. DevTools stay closed unless you set `BB_DESKTOP_OPEN_DEVTOOLS=1`, matching a released build. Both commands always repackage first; Turbo caches everything except electron-builder itself. Signing is left to electron-builder's keychain auto-discovery, so machines without a Developer ID identity produce unsigned artifacts and macOS shows the usual first-launch warning.
 - The packaged app defaults to server/frontend `:38886`, host daemon `:38887`, data dir `~/.bb/`, and logs under `~/.bb/logs/`.
 - `bb-app` (including `pnpm start`), `bb-server`, and `bb-host-daemon` capture service stdout and stderr directly in `logs/server-stdio.log` and `logs/host-daemon-stdio.log` under the selected data directory. These append across restarts and are separate from rotating application logs. Use `tail -F` on these files for console output and early startup errors; service output is no longer forwarded to the launcher's terminal.
 - Entity IDs in URLs (`proj_*`, `thr_*`) are primary keys. Query them directly against the active data dir: `sqlite3 <data>/bb.db "SELECT * FROM threads WHERE id = 'thr_xxx';"`.
 - API routes are under `/api/v1/`, for example `GET /api/v1/threads/:id`.
 - Use `curl` against the server API to isolate frontend issues from server behavior.
 - Use the CLI to inspect state: `pnpm bb thread show <id>`, `pnpm bb project list`, `pnpm bb status`. From source, use `pnpm bb:dev`.
+
+## Archive Confirmation Counts
+
+`GET /api/v1/threads/:id/child-summary` and `sdk.threads.childSummary` return
+`nonDeletedChildCount` for deletion (direct children, including archived rows)
+and `unarchivedDescendantCount` for archive confirmation. The latter follows
+the same hierarchy, lifecycle-owner, and hidden source-fork edges as
+`archive-all`, deduplicates threads, traverses archived intermediaries, and
+excludes already archived or deleted candidates and the requested root.
+The UI adds the root to the displayed total and skips confirmation when no
+unarchived descendants remain. The summary is a preview; concurrent changes
+can alter the eventual archive result. CLI and SDK archive calls remain
+non-interactive.
+
+## Thread Storage Media Responses
+
+`GET /api/v1/threads/:id/thread-storage/files/:filePath` supports a single
+HTTP byte range for media playback and seeking. Responses advertise
+`Accept-Ranges: bytes`; bounded, open-ended, and suffix ranges return `206`
+with `Content-Range` and the selected bytes. Unsatisfiable ranges return `416`
+with `Content-Range: bytes */<size>`. Malformed ranges, unsupported units, and
+multipart ranges fall back to the full `200` response. HEAD ignores Range.
+
+`If-None-Match` revalidation takes precedence over Range. Storage responses use
+weak metadata ETags (`W/"file-<revision>"`), not content SHA-256 hashes. This
+avoids reading an entire large file just to validate it. Because the validator
+is weak, any `If-Range` header falls back to a full `200` response, including a
+matching weak tag or date. HTML previews retain their sandbox CSP, no-store
+policy, and 5 MiB size limit.
+
+The server uses `host.read_file_chunk` for a metadata-only probe (`length: 0`),
+then reads at most 1 MiB per RPC as the HTTP consumer pulls data. HEAD, `304`,
+and `416` responses read no contents. Cancelling or aborting stops subsequent
+reads; an already in-flight RPC can finish. Each RPC opens and closes its file
+handle, so no remote read session needs cleanup. Offsets and lengths are
+validated at the daemon boundary, and paths remain confined to thread storage.
+
+The daemon returns a revision based on device, inode, size, and nanosecond
+mtime/ctime. Every content read checks the expected revision before and after
+reading from its open descriptor. A mismatch before response headers produces
+retryable `409 file_changed`; a change or error after streaming starts aborts
+the HTTP body. The server also rejects short/misaligned chunks. This detects
+ordinary writes, truncation, and replacement; it is not an immutable filesystem
+snapshot or a cryptographic guarantee against changes hidden by filesystem
+metadata granularity.
+
+Thread-storage downloads now bypass the old whole-file size caps (including
+the 25 MiB non-image cap). Each chunk stays bounded regardless of file size.
+Existing `host.read_file` consumers and other raw-file routes retain their
+whole-file limits and SHA-256 validators. No public SDK/CLI request shape
+changed. Host-daemon protocol 219 introduces the chunk RPC and requires daemon
+updates; older enrolled daemons cannot serve this new path until updated.
+
+## Stale Workspace Claims
+
+Failed thread provisioning immediately requests environment cleanup. If a previous
+failure left a claim behind, sends, environment admission, and provider path claims
+repair it when they encounter it; restarting the server is not required.
+
+Claims owned by threads that are still starting or stopping remain blocked. A stale
+claim on a ready or shared checkout is released locally, preserving the workspace.
+A partially created environment retains its claim and is scheduled for the existing
+background lifecycle cleanup. Sends report `workspace_busy` with “Workspace cleanup
+is pending. Try again shortly.” until removal completes. Provider cleanup is never
+awaited by this admission repair, and startup does not scan for abandoned claims.
 
 ## Local Dev QA
 

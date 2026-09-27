@@ -4,7 +4,7 @@ import type {
   PromptMentionSuggestion,
   ThreadMentionRelation,
 } from "@bb/client-core";
-import { compareCodepoint } from "@bb/client-core";
+import { compareCodepoint, mentionIdentityMatchRank } from "@bb/client-core";
 
 type ThreadMentionSuggestion = Extract<
   PromptMentionSuggestion,
@@ -19,12 +19,15 @@ interface BuildThreadMentionSuggestionsArgs {
   currentEnvironmentId: string | null;
   projectNamesById: ReadonlyMap<string, string>;
   limit: number;
+  resolveTitle: (title: string) => string;
 }
 
 interface RankedThreadMentionSuggestion {
   suggestion: ThreadMentionSuggestion;
+  matchRank: number;
   relationRank: number;
   score: number;
+  activityAt: number;
 }
 
 interface ThreadMentionContext {
@@ -37,8 +40,9 @@ interface ThreadMentionContext {
 const THREAD_RELATION_RANK = {
   directParentOrChild: 0,
   sameParent: 1,
-  sameProject: 2,
-  unrelated: 3,
+  sameEnvironment: 2,
+  sameProject: 3,
+  unrelated: 4,
 };
 
 function getThreadDisplayTitle(thread: Thread): string | undefined {
@@ -155,6 +159,9 @@ function getThreadRelationRank(
   if (relation === "same-parent") {
     return THREAD_RELATION_RANK.sameParent;
   }
+  if (relation === "same-environment") {
+    return THREAD_RELATION_RANK.sameEnvironment;
+  }
   if (
     context.currentProjectId !== undefined &&
     thread.projectId === context.currentProjectId
@@ -168,18 +175,19 @@ function compareRankedThreadMentionSuggestions(
   left: RankedThreadMentionSuggestion,
   right: RankedThreadMentionSuggestion,
 ): number {
-  if (left.score !== right.score) {
-    return right.score - left.score;
+  if (left.matchRank !== right.matchRank) {
+    return left.matchRank - right.matchRank;
   }
   if (left.relationRank !== right.relationRank) {
     return left.relationRank - right.relationRank;
   }
-  const leftTitle = left.suggestion.title ?? "";
-  const rightTitle = right.suggestion.title ?? "";
-  return (
-    leftTitle.localeCompare(rightTitle) ||
-    compareCodepoint(left.suggestion.threadId, right.suggestion.threadId)
-  );
+  if (left.score !== right.score) {
+    return right.score - left.score;
+  }
+  if (left.activityAt !== right.activityAt) {
+    return right.activityAt - left.activityAt;
+  }
+  return compareCodepoint(left.suggestion.threadId, right.suggestion.threadId);
 }
 
 export function buildThreadMentionSuggestions(
@@ -198,7 +206,14 @@ export function buildThreadMentionSuggestions(
     items: candidateThreads,
     query: trimmedQuery,
     getText: getThreadSearchText,
-    getAliases: (thread) => [thread.id],
+    getAliases: (thread) => {
+      const title = getThreadDisplayTitle(thread);
+      const resolvedTitle =
+        title === undefined ? undefined : args.resolveTitle(title);
+      return resolvedTitle === undefined || resolvedTitle === title
+        ? [thread.id]
+        : [thread.id, resolvedTitle];
+    },
     limit: candidateThreads.length,
   });
 
@@ -211,12 +226,17 @@ export function buildThreadMentionSuggestions(
       );
       return {
         suggestion,
+        matchRank: mentionIdentityMatchRank(
+          [suggestion.title ?? suggestion.threadId, suggestion.threadId],
+          trimmedQuery,
+        ),
         relationRank: getThreadRelationRank(
           match.item,
           context,
           suggestion.relation,
         ),
         score: match.score,
+        activityAt: match.item.updatedAt,
       };
     })
     .sort(compareRankedThreadMentionSuggestions)

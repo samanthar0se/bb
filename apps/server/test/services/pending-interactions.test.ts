@@ -30,6 +30,7 @@ import {
   createUserAnswerResolution,
   createUserQuestionPayload,
 } from "../helpers/pending-interactions.js";
+import { advanceUntilSettled } from "../helpers/fake-timers.js";
 import { withTestHarness } from "../helpers/test-app.js";
 import {
   SERVER_MOVE_FROZEN_RETRY_MS,
@@ -153,8 +154,9 @@ describe("pending interaction lifecycle", () => {
         expect(listPending()).toMatchObject([{ status: "pending" }]);
 
         setServerMoveFrozen(harness.db, false);
-        await vi.advanceTimersByTimeAsync(SERVER_MOVE_FROZEN_RETRY_MS);
-        await expect(pending).resolves.toEqual({
+        await expect(
+          advanceUntilSettled(pending, SERVER_MOVE_FROZEN_RETRY_MS),
+        ).resolves.toEqual({
           outcome: "cancelled",
           reason: "timeout",
         });
@@ -385,29 +387,6 @@ describe("pending interaction lifecycle", () => {
         });
       expect(resolved.resolution).toEqual({ kind: "plugin_submitted" });
       await expect(pending).resolves.toMatchObject({ outcome: "submitted" });
-    });
-  });
-
-  it("contains abort callback failures and settles the in-memory waiter", async () => {
-    await withTestHarness(async (harness) => {
-      const thread = seedPluginInteractionThread(harness.deps, "abort");
-      const controller = new AbortController();
-      const pending = requestPluginInteraction(harness.deps, {
-        threadId: thread.id,
-        signal: controller.signal,
-      });
-      vi.spyOn(
-        harness.deps.pendingInteractions,
-        "cancelPluginInteraction",
-      ).mockImplementation(() => {
-        throw new Error("cancellation failed");
-      });
-
-      expect(() => controller.abort()).not.toThrow();
-      await expect(pending).resolves.toEqual({
-        outcome: "cancelled",
-        reason: "request-aborted",
-      });
     });
   });
 
@@ -2310,8 +2289,11 @@ it("rejects a late answer when an abort callback settled the waiter but failed t
       .mockImplementationOnce(() => {
         throw new Error("storage temporarily unavailable");
       });
-    controller.abort();
-    await expect(pending).resolves.toMatchObject({ outcome: "cancelled" });
+    expect(() => controller.abort()).not.toThrow();
+    await expect(pending).resolves.toEqual({
+      outcome: "cancelled",
+      reason: "request-aborted",
+    });
     cancel.mockRestore();
     await expect(
       harness.deps.pendingInteractions.respondToPluginInteraction({
