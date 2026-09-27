@@ -1,4 +1,5 @@
 import { usePendingAttachmentUploads } from "./usePendingAttachmentUploads";
+import { useLeaveWithDraftHandoff } from "./useLeaveWithDraftHandoff";
 import { useInitialPromptDraft } from "./mentions/initial-prompt-draft";
 import { ProviderRequirementBanner } from "./banner/ProviderRequirementBanner";
 import { Button } from "@bb/shared-ui/button";
@@ -17,8 +18,8 @@ import {
 import { useNavigate } from "react-router-dom";
 import {
   clearPluginDraftMetadataIfCurrentMatches,
-  getAllPluginDraftMetadata,
   EMPTY_PLUGIN_DRAFT_METADATA,
+  getAllPluginDraftMetadata,
   getPluginDraftMetadataSnapshot,
   restorePluginDraftMetadataIfEmpty,
   setPluginDraftMetadata,
@@ -258,10 +259,6 @@ export function resolveSubmittedExecutionSources(
 export interface NewThreadComposerSubmission extends NewThreadRequest {
   pluginSubmission?: CreateThreadRequest["pluginSubmission"];
   sendAt?: number;
-  experimental_pluginMetadataByPlugin?: Record<
-    string,
-    import("@bb/domain").JsonObject
-  >;
 }
 
 export interface NewThreadComposerProps {
@@ -273,6 +270,10 @@ export interface NewThreadComposerProps {
   resetKey?: string | number | null;
   preferReadyProviderWhenUnset?: boolean;
   onSubmit: (request: NewThreadComposerSubmission) => void | Promise<void>;
+  onLeaveWithDraft?: (
+    request: NewThreadRequest,
+    draft: PromptDraftState,
+  ) => void;
   focusRequest?: number;
   children: (state: NewThreadComposerState) => ReactNode;
 }
@@ -473,6 +474,7 @@ export function NewThreadComposer({
   resetKey,
   preferReadyProviderWhenUnset = false,
   onSubmit,
+  onLeaveWithDraft,
   focusRequest,
   children,
 }: NewThreadComposerProps) {
@@ -697,9 +699,7 @@ export function NewThreadComposer({
     usePromptBoxMachinePreference(projectId);
   const [activeSeedSignature, setActiveSeedSignature] = useState(seedSignature);
   const composerGenerationRef = useRef(seedSignature);
-  if (composerGenerationRef.current !== seedSignature) {
-    composerGenerationRef.current = seedSignature;
-  }
+  composerGenerationRef.current = seedSignature;
   const [seedOverridden, setBranchSeedOverridden] = useState(false);
   const [pickedProviderMachine, setPickedProviderMachine] = useState<{
     selectionValue: string;
@@ -1598,40 +1598,22 @@ export function NewThreadComposer({
     selectedThreadModel,
     submissionEnvironmentUnavailable: submissionEnvironment === null,
   });
-  const submitDraft = useCallback(
-    async (
-      blockedReason: string | null,
-      submitOptions: ExperimentalComposerSubmitOptions | null,
-      pluginSubmission?: NewThreadComposerSubmission["pluginSubmission"],
-    ) => {
-      const submittedDraft = promptDraft.getCurrent();
-      const submittedMetadata = getAllPluginDraftMetadata(
-        promptDraft.storageKey,
-      );
-      const input = promptDraftToInput(submittedDraft);
+  const buildNewThreadRequest = useCallback(
+    (input: NewThreadRequest["input"]): NewThreadRequest | null => {
       if (
-        blockedReason !== null ||
-        submitDisabledReason !== null ||
-        input.length === 0 ||
-        isSubmittingRef.current ||
         projectDefaultsUnavailable ||
         submissionEnvironment === null ||
         !selectedProviderId ||
         !selectedThreadModel
       ) {
-        throw new Error(
-          blockedReason ??
-            submitDisabledReason ??
-            (input.length === 0
-              ? "Type a message first."
-              : "This composer is not ready to submit yet."),
-        );
+        return null;
       }
       const sources: CreateExecutionInputSources = {
         ...executionInputSources,
         ...seededExecutionInputSources,
       };
-      const request: NewThreadComposerSubmission = {
+      const metadata = getAllPluginDraftMetadata(promptDraft.storageKey);
+      return {
         projectId,
         providerId: selectedProviderId,
         model: selectedThreadModel,
@@ -1644,13 +1626,66 @@ export function NewThreadComposer({
         ),
         environment: submissionEnvironment,
         input,
+        ...(Object.keys(metadata).length > 0
+          ? { experimental_pluginMetadataByPlugin: metadata }
+          : {}),
+      };
+    },
+    [
+      executionInputSources,
+      permissionMode,
+      projectDefaultsUnavailable,
+      projectId,
+      promptDraft.storageKey,
+      reasoningLevel,
+      seededExecutionInputSources,
+      submissionEnvironment,
+      selectedProviderId,
+      selectedThreadModel,
+      serviceTier,
+      supportsServiceTier,
+    ],
+  );
+  useLeaveWithDraftHandoff({
+    buildRequest: buildNewThreadRequest,
+    getDraft: promptDraft.getCurrent,
+    isSubmittingRef,
+    onLeaveWithDraft,
+  });
+
+  const submitDraft = useCallback(
+    async (
+      blockedReason: string | null,
+      submitOptions: ExperimentalComposerSubmitOptions | null,
+      pluginSubmission?: NewThreadComposerSubmission["pluginSubmission"],
+    ) => {
+      const submittedDraft = promptDraft.getCurrent();
+      const submittedMetadata = getAllPluginDraftMetadata(
+        promptDraft.storageKey,
+      );
+      const input = promptDraftToInput(submittedDraft);
+      const baseRequest =
+        blockedReason !== null ||
+        submitDisabledReason !== null ||
+        input.length === 0 ||
+        isSubmittingRef.current
+          ? null
+          : buildNewThreadRequest(input);
+      if (baseRequest === null) {
+        throw new Error(
+          blockedReason ??
+            submitDisabledReason ??
+            (input.length === 0
+              ? "Type a message first."
+              : "This composer is not ready to submit yet."),
+        );
+      }
+      const request: NewThreadComposerSubmission = {
+        ...baseRequest,
         ...(submitOptions?.sendAt === undefined
           ? {}
           : { sendAt: submitOptions.sendAt }),
         ...(pluginSubmission === undefined ? {} : { pluginSubmission }),
-        ...(Object.keys(submittedMetadata).length > 0
-          ? { experimental_pluginMetadataByPlugin: submittedMetadata }
-          : {}),
       };
       isSubmittingRef.current = true;
       setIsSubmitting(true);
@@ -1661,41 +1696,52 @@ export function NewThreadComposer({
         promptDraft.storageKey,
         submittedMetadata,
       );
+      let submittedDraftChanged = false;
+      const unsubscribeDraft = promptDraft.subscribe(() => {
+        submittedDraftChanged = true;
+      });
+      const unsubscribeMetadata = subscribePluginDraftMetadata(
+        promptDraft.storageKey,
+        () => {
+          submittedDraftChanged = true;
+        },
+      );
       try {
         await onSubmit(request);
         clearReuseEnvironment();
       } catch (submitError) {
-        if (clearedSubmittedDraft) {
+        if (
+          !submittedDraftChanged &&
+          clearedSubmittedDraft &&
+          clearedSubmittedMetadata &&
+          isPromptDraftEmpty(promptDraft.getCurrent()) &&
+          Object.keys(getAllPluginDraftMetadata(promptDraft.storageKey))
+            .length === 0
+        ) {
+          if (Object.keys(submittedMetadata).length > 0) {
+            restorePluginDraftMetadataIfEmpty(
+              promptDraft.storageKey,
+              submittedMetadata,
+            );
+          }
           promptDraft.restoreIfEmpty(submittedDraft);
-        }
-        if (clearedSubmittedMetadata) {
-          restorePluginDraftMetadataIfEmpty(
-            promptDraft.storageKey,
-            submittedMetadata,
-          );
         }
         throw submitError;
       } finally {
         isSubmittingRef.current = false;
         setIsSubmitting(false);
+        unsubscribeDraft();
+        unsubscribeMetadata();
       }
     },
     [
+      buildNewThreadRequest,
       clearReuseEnvironment,
-      executionInputSources,
       onSubmit,
-      permissionMode,
-      projectDefaultsUnavailable,
-      projectId,
       promptDraft,
-      reasoningLevel,
-      seededExecutionInputSources,
+      setAttachmentError,
+      setIsSubmitting,
       submitDisabledReason,
-      submissionEnvironment,
-      selectedProviderId,
-      selectedThreadModel,
-      serviceTier,
-      supportsServiceTier,
     ],
   );
 

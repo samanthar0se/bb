@@ -94,10 +94,10 @@ export const createThreadRequestSchema = z
     origin: threadCreateOriginSchema,
     originPluginId: z.string().min(1).optional(),
     pluginMetadata: pluginMetadataSchema.optional(),
-    lifecycleOwnerThreadId: z.string().min(1).optional(),
     experimental_pluginMetadataByPlugin: z
       .record(pluginIdSchema, pluginMetadataSchema)
       .optional(),
+    lifecycleOwnerThreadId: z.string().min(1).optional(),
     visibility: threadVisibilitySchema.optional(),
     title: z.string().min(1).optional(),
     input: z.array(promptInputSchema),
@@ -124,53 +124,75 @@ export const createThreadRequestSchema = z
     pluginSubmission: z
       .object({ pluginId: pluginIdSchema, data: jsonValueSchema })
       .optional(),
+    /**
+     * `true` ⇒ the thread is created as a draft: it stays `pending`, nothing
+     * is dispatched or provisioned, and `input` becomes the thread's draft
+     * instead of its first message. Sending a message to the thread later
+     * starts it and clears the draft.
+     */
+    draft: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
-    if (
-      value.experimental_pluginMetadataByPlugin !== undefined &&
-      value.origin === "plugin"
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          'experimental_pluginMetadataByPlugin cannot be used with origin "plugin"',
-        path: ["experimental_pluginMetadataByPlugin"],
-      });
-    }
-    if (
-      value.experimental_pluginMetadataByPlugin !== undefined &&
-      new TextEncoder().encode(
-        JSON.stringify(value.experimental_pluginMetadataByPlugin),
-      ).byteLength >
+    if (value.experimental_pluginMetadataByPlugin !== undefined) {
+      if (value.origin === "plugin") {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            'experimental_pluginMetadataByPlugin cannot be used with origin "plugin"',
+          path: ["experimental_pluginMetadataByPlugin"],
+        });
+      }
+      if (
+        new TextEncoder().encode(
+          JSON.stringify(value.experimental_pluginMetadataByPlugin),
+        ).byteLength >
         256 * 1024
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "experimental_pluginMetadataByPlugin exceeds 256 KiB",
-        path: ["experimental_pluginMetadataByPlugin"],
-      });
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: "experimental_pluginMetadataByPlugin exceeds 256 KiB",
+          path: ["experimental_pluginMetadataByPlugin"],
+        });
+      }
+      if (value.originKind !== null) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "experimental_pluginMetadataByPlugin cannot be used with originKind",
+          path: ["experimental_pluginMetadataByPlugin"],
+        });
+      }
+      if (value.sourceThreadId !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "experimental_pluginMetadataByPlugin cannot be used with sourceThreadId",
+          path: ["experimental_pluginMetadataByPlugin"],
+        });
+      }
     }
-    if (
-      value.experimental_pluginMetadataByPlugin !== undefined &&
-      value.originKind !== null
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "experimental_pluginMetadataByPlugin cannot be used with originKind",
-        path: ["experimental_pluginMetadataByPlugin"],
-      });
-    }
-    if (
-      value.experimental_pluginMetadataByPlugin !== undefined &&
-      value.sourceThreadId !== undefined
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "experimental_pluginMetadataByPlugin cannot be used with sourceThreadId",
-        path: ["experimental_pluginMetadataByPlugin"],
-      });
+    if (value.draft === true) {
+      for (const field of [
+        "sendAt",
+        "pluginSubmission",
+        "sourceThreadId",
+        "sourceSeqEnd",
+      ] as const) {
+        if (value[field] !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message: `${field} cannot be combined with draft`,
+            path: [field],
+          });
+        }
+      }
+      if (value.originKind !== null) {
+        ctx.addIssue({
+          code: "custom",
+          message: "originKind cannot be combined with draft",
+          path: ["originKind"],
+        });
+      }
     }
     if (value.origin === "plugin" && value.originPluginId === undefined) {
       ctx.addIssue({
@@ -422,6 +444,15 @@ export type CreateQueuedMessageRequest = z.infer<
   typeof createQueuedMessageRequestSchema
 >;
 
+export const updateThreadDraftRequestSchema = z
+  .object({
+    input: z.array(promptInputSchema),
+  })
+  .strict();
+export type UpdateThreadDraftRequest = z.infer<
+  typeof updateThreadDraftRequestSchema
+>;
+
 export const updateQueuedMessageRequestSchema = z.object({
   expectedUpdatedAt: z.number().int().nonnegative(),
   input: z.array(promptInputSchema).min(1),
@@ -548,6 +579,10 @@ export const threadResponseSchema = threadWithRuntimeSchema.extend({
   // `GET /threads/:id/queued-messages` supplies the reasons once a surface
   // actually renders them.
   queuedMessageCount: z.number().int().nonnegative(),
+  // The thread's saved, unsent composer message, or null when it has none. A
+  // draft thread is a `pending` thread whose first message lives here until it
+  // is sent; sending any message to the thread clears it.
+  draft: z.array(promptInputSchema).nullable(),
 });
 export type ThreadResponse = z.infer<typeof threadResponseSchema>;
 

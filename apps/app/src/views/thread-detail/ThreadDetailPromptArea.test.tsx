@@ -665,6 +665,10 @@ vi.mock("@/hooks/mutations/project-mutations", () => ({
 }));
 
 vi.mock("@/hooks/mutations/thread-runtime-mutations", () => ({
+  useUpdateThreadDraft: () => ({
+    isPending: false,
+    mutate: vi.fn(),
+  }),
   useCancelThreadPlan: () => ({
     isPending: false,
     mutate: mocks.cancelThreadPlanMutate,
@@ -879,6 +883,7 @@ function buildPromptAreaElement({
   return (
     <QueryClientProvider client={testQueryClient}>
       <ThreadDetailPromptArea
+        serverDraft={null}
         activeBackgroundAgentCount={0}
         activeBackgroundCommands={[]}
         activePromptMode={activePromptMode}
@@ -1008,8 +1013,8 @@ describe("ThreadDetailPromptArea", () => {
       screen.getByRole("button", { name: "Capture plugin host" }),
     );
     const pluginSubmission = {
-      pluginId: "drafts",
-      data: { kind: "draft" } as const,
+      pluginId: "example-plugin",
+      data: { kind: "hold" } as const,
     };
 
     await act(async () => {

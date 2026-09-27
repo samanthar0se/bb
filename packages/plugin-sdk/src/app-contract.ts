@@ -2426,7 +2426,9 @@ export interface PluginComposerApi {
   scope: PluginComposerScope;
   /** Current plain text for this composer scope. */
   readonly text: string;
-  readonly experimental_pluginMetadata: Readonly<Record<string, JsonValue>> | null;
+  readonly experimental_pluginMetadata: Readonly<
+    Record<string, JsonValue>
+  > | null;
   /**
    * Replace the draft's plain text. Attachments are preserved. Inline mentions
    * outside the changed range are preserved and rebased; mentions overlapped
@@ -2829,6 +2831,8 @@ export interface NewThreadRequest {
   executionInputSources: CreateExecutionInputSources;
   environment: CreateThreadEnvironmentArgs;
   input: PromptInput[];
+  /** Per-plugin draft metadata carried into a user-created thread. */
+  experimental_pluginMetadataByPlugin?: Record<string, JsonObject>;
   /**
    * Epoch ms the first turn should dispatch at. Present only when the
    * submission came from `useComposer().experimental_submit` — a scheduled
