@@ -469,7 +469,6 @@ interface PromptBoxInternalProps {
   placeholder?: string;
   autoFocus?: boolean;
   textEffects?: readonly ComposerTextEffectSource[];
-  experimental_selectedProviderId?: string | null;
   onComposerLayoutChange?: (layout: ComposerView["layout"]) => void;
   header?: ReactNode;
   modeHeader?: ReactNode;
@@ -1223,7 +1222,6 @@ export function PromptBoxInternal({
   editorLayout = "thread",
   onCollapse,
   compact,
-  experimental_selectedProviderId = null,
   containerCompactPlaceholder,
   heightAnimationKey,
   history,
@@ -1487,7 +1485,6 @@ export function PromptBoxInternal({
   const localComposerView = usePluginComposerViewModel({
     scope: pluginComposerHost?.scope ?? DEFAULT_COMPOSER_SCOPE,
     layout: composerLayout,
-    experimental_selectedProviderId,
     text: value,
     attachmentCount: attachments.length,
     isRunning,

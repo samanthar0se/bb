@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useComposerView } from "@/lib/plugin-sdk-hooks";
 import { NewThreadPromptBoxUI } from "./NewThreadPromptBox";
 
 vi.mock("@/components/promptbox/usePromptVoice", () => ({
@@ -16,10 +19,14 @@ vi.mock("@/components/promptbox/usePromptVoice", () => ({
   }),
 }));
 
-vi.mock("@/components/plugin/ComposerExtensionHost", () => ({
-  useComposerExtensionController: () => ({}),
-  ComposerExtensionHost: () => <div data-testid="root-composer-mounted" />,
-}));
+function SelectedProviderProbe() {
+  const view = useComposerView();
+  return (
+    <div data-testid="selected-provider">
+      {String(view.experimental_selectedProviderId)}
+    </div>
+  );
+}
 
 const props: ComponentProps<typeof NewThreadPromptBoxUI> = {
   value: "",
@@ -62,6 +69,7 @@ const props: ComponentProps<typeof NewThreadPromptBoxUI> = {
     },
     worktree: { options: [], value: null, onChange: vi.fn() },
     permission: { options: [], onChange: vi.fn(), supported: false },
+    header: <SelectedProviderProbe />,
   },
   execution: {
     provider: { selectedId: "codex" },
@@ -80,9 +88,35 @@ const props: ComponentProps<typeof NewThreadPromptBoxUI> = {
 afterEach(cleanup);
 
 describe("NewThreadPromptBoxUI", () => {
-  it("renders the root composer without plugin context", () => {
-    render(<NewThreadPromptBoxUI {...props} />);
+  it("passes the selected provider through the production composer view as it changes", () => {
+    const client = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryClientProvider>
+    );
+    const rendered = render(<NewThreadPromptBoxUI {...props} />, { wrapper });
+    expect(screen.getByTestId("selected-provider").textContent).toBe("codex");
 
-    expect(screen.getByTestId("root-composer-mounted")).toBeTruthy();
+    rendered.rerender(
+      <NewThreadPromptBoxUI
+        {...props}
+        execution={{
+          ...props.execution,
+          provider: { selectedId: "claude-code" },
+        }}
+      />,
+    );
+    expect(screen.getByTestId("selected-provider").textContent).toBe(
+      "claude-code",
+    );
+
+    rendered.rerender(
+      <NewThreadPromptBoxUI
+        {...props}
+        execution={{ ...props.execution, provider: { selectedId: undefined } }}
+      />,
+    );
+    expect(screen.getByTestId("selected-provider").textContent).toBe("null");
   });
 });

@@ -718,9 +718,7 @@ function FollowUpPromptBoxWithComposer({
         blurOnPointerSubmit={isCompactViewport && isPointerCoarse}
         textEffects={textEffects}
         onComposerLayoutChange={setComposerLayout}
-        experimental_selectedProviderId={execution.provider.selectedId ?? null}
         scrollToBottomOnSubmit={submitMode.kind !== "queue"}
-
         history={composer.history}
         focusEndKey={focusEndKey}
         placeholder={composer.promptPlaceholder}
