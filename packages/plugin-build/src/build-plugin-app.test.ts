@@ -281,7 +281,8 @@ describe("plugin app runtime shim", () => {
       join(dir, "app.ts"),
       'import "./app.css";\n' +
         'export const utilityClass = "flex-col";\n' +
-        'export const siblingClass = "[&~*]:hidden";\n',
+        'export const siblingClass = "[&~*]:hidden";\n' +
+        'export const nestedClasses = "hover:underline [&_svg]:size-4";\n',
     );
     await writeFile(
       join(dir, "app.css"),
@@ -297,11 +298,13 @@ describe("plugin app runtime shim", () => {
 
     const scope =
       ":where([data-bb-plugin=css-fixture],[data-bb-plugin-root]:not([data-bb-plugin]))";
-    expect(css).toContain(`${scope} .flex-col`);
-    expect(css).toContain(`${scope}.flex-col`);
+    expect(css).toContain(`${scope} .flex-col,${scope}.flex-col{`);
     const sibling = String.raw`.\[\&\~\*\]\:hidden`;
-    expect(css).toContain(`${scope} ${sibling}`);
+    expect(css).toContain(`${scope} ${sibling}~*`);
     expect(css).not.toContain(`${scope}${sibling}`);
+    expect(css).toContain(`${scope} .hover\\:underline:hover`);
+    expect(css).toContain(String.raw`${scope} .\[\&_svg\]\:size-4 svg`);
+    expect(css).not.toMatch(/:is\(:where\(\[data-bb-plugin/);
     expect(css).not.toContain("@scope");
     expect(css).not.toContain(`${scope} .bb71-authored-decoration`);
     expect(css).toContain(".bb71-authored-decoration");

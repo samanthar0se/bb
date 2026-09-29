@@ -71,15 +71,34 @@ function scopeStatements(css: string, scope: string): string {
 
       const nestedSibling = hasNestedSiblingRule(statement.body);
       const selectors = splitSelectorList(prelude)
-        .flatMap((selector) =>
-          nestedSibling || hasSiblingCombinator(selector)
-            ? [`${scope} ${selector}`]
-            : [`${scope} ${selector}`, `${scope}${selector}`],
-        )
+        .flatMap((selector) => scopeSelector(selector, scope, !nestedSibling))
         .join(",");
       return `${selectors}{${statement.body}}`;
     })
     .join("");
+}
+
+function scopeSelector(
+  selector: string,
+  scope: string,
+  allowSelfArm: boolean,
+): string[] {
+  const wrapper = /^:(?:where|is)\(/.exec(selector);
+  if (
+    wrapper !== null &&
+    findParenEnd(selector, wrapper[0].length - 1) === selector.length - 1
+  ) {
+    const inner = selector.slice(wrapper[0].length, -1);
+    const innerSelectors = splitSelectorList(inner);
+    if (innerSelectors.length === 1 && hasCombinator(inner)) {
+      return scopeSelector(inner, scope, allowSelfArm).map(
+        (scoped) => `${wrapper[0]}${scoped})`,
+      );
+    }
+  }
+  return allowSelfArm && !hasSiblingCombinator(selector)
+    ? [`${scope} ${selector}`, `${scope}${selector}`]
+    : [`${scope} ${selector}`];
 }
 
 function splitStatements(css: string): Statement[] {
@@ -95,6 +114,18 @@ function splitStatements(css: string): Statement[] {
     }
     if (char === '"' || char === "'") {
       index = findStringEnd(css, index);
+      continue;
+    }
+    if (char === "/" && css[index + 1] === "*") {
+      const commentEnd = findCommentEnd(css, index);
+      if (css.slice(preludeStart, index).trim().length === 0) {
+        statements.push({
+          prelude: css.slice(preludeStart, commentEnd + 1),
+          body: null,
+        });
+        preludeStart = commentEnd + 1;
+      }
+      index = commentEnd;
       continue;
     }
     if (char === "(") parenDepth += 1;
@@ -206,6 +237,53 @@ function findBlockEnd(css: string, openIndex: number): number {
     }
   }
   throw new Error("Unbalanced braces in compiled plugin CSS.");
+}
+
+function hasCombinator(selector: string): boolean {
+  let depth = 0;
+  for (let index = 0; index < selector.length; index += 1) {
+    const char = selector[index];
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      index = findStringEnd(selector, index);
+      continue;
+    }
+    if (char === "(" || char === "[") depth += 1;
+    else if (char === ")" || char === "]") depth -= 1;
+    else if (depth === 0 && /[\s>+~]/.test(char)) return true;
+  }
+  return false;
+}
+
+function findParenEnd(selector: string, openIndex: number): number {
+  let depth = 0;
+  for (let index = openIndex; index < selector.length; index += 1) {
+    const char = selector[index];
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      index = findStringEnd(selector, index);
+      continue;
+    }
+    if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function findCommentEnd(css: string, openIndex: number): number {
+  const end = css.indexOf("*/", openIndex + 2);
+  if (end === -1)
+    throw new Error("Unterminated comment in compiled plugin CSS.");
+  return end + 1;
 }
 
 function findStringEnd(css: string, openIndex: number): number {

@@ -31,6 +31,14 @@ describe("scopePluginUtilities", () => {
     );
   });
 
+  it("scopes inside a :where() that wraps a combinator so the self arm stays on the utility element", () => {
+    expect(
+      scopeUtilities(":where(.space-y-2>:not(:last-child)){margin-top:1rem}"),
+    ).toBe(
+      `@layer utilities{:where(${SCOPE} .space-y-2>:not(:last-child)),:where(${SCOPE}.space-y-2>:not(:last-child)){margin-top:1rem}}`,
+    );
+  });
+
   it("drops the self arm for sibling combinators so a portal root cannot reach host siblings", () => {
     const hidden = String.raw`.\[\&\~\*\]\:hidden`;
     expect(scopeUtilities(`${hidden}{&~*{display:none}}`)).toBe(
@@ -125,6 +133,19 @@ describe("scopePluginUtilities", () => {
         ROOTS,
       ),
     ).toThrow(/class rule outside the utilities layer/);
+  });
+
+  it("keeps a license banner that precedes a layer without mistaking it for a class rule", () => {
+    const banner =
+      "/*! tailwindcss v4.3.0 | MIT License | https://tailwindcss.com */";
+    expect(
+      scopePluginUtilities(
+        `${banner}\n@layer theme{:root{--a:1}}@layer utilities{.a{color:red}}`,
+        ROOTS,
+      ),
+    ).toBe(
+      `${banner}\n@layer theme{:root{--a:1}}@layer utilities{${SCOPE} .a,${SCOPE}.a{color:red}}`,
+    );
   });
 
   it("allows the universal registered-property fallback layer", () => {
