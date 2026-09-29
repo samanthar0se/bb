@@ -58,15 +58,18 @@ describe("scopePluginUtilities", () => {
     );
   });
 
-  it("scopes inside a :where() that wraps a combinator so the self arm stays on the utility element", () => {
-    expect(
-      scopeUtilities(":where(.space-y-2>:not(:last-child)){margin-top:1rem}"),
-    ).toBe(
+  it("scopes a :where()-wrapped child combinator from outside, where every root has an ancestor hash", () => {
+    const spaceY = ":where(.space-y-2>:not(:last-child))";
+    expect(scopeUtilities(`${spaceY}{margin-top:1rem}`)).toBe(
+      `@layer utilities{${descendantArms(spaceY)}{margin-top:1rem}}`,
+    );
+  });
+
+  it("scopes inside a :where()-wrapped descendant combinator so a host ancestor cannot satisfy it", () => {
+    expect(scopeUtilities(":where(.a .b){color:red}")).toBe(
       "@layer utilities{" +
-        ANCESTORS.map(
-          (ancestor) => `:where(${ancestor} .space-y-2>:not(:last-child))`,
-        ).join(",") +
-        `,:where(${SELF}.space-y-2>:not(:last-child)){margin-top:1rem}}`,
+        ANCESTORS.map((ancestor) => `:where(${ancestor} .a .b)`).join(",") +
+        `,:where(${SELF}.a .b){color:red}}`,
     );
   });
 

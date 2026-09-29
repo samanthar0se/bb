@@ -103,8 +103,11 @@ function scopeSelector(
     findParenEnd(selector, wrapper[0].length - 1) === selector.length - 1
   ) {
     const inner = selector.slice(wrapper[0].length, -1);
-    const innerSelectors = splitSelectorList(inner);
-    if (innerSelectors.length === 1 && hasCombinator(inner)) {
+    const combinators = topLevelCombinators(inner);
+    if (splitSelectorList(inner).length === 1 && combinators.length > 0) {
+      if (combinators.length === 1 && combinators[0] === ">") {
+        return scope.ancestors.map((ancestor) => `${ancestor} ${selector}`);
+      }
       return scopeSelector(inner, scope, allowSelfArm).map(
         (scoped) => `${wrapper[0]}${scoped})`,
       );
@@ -256,23 +259,33 @@ function findBlockEnd(css: string, openIndex: number): number {
   throw new Error("Unbalanced braces in compiled plugin CSS.");
 }
 
-function hasCombinator(selector: string): boolean {
+function topLevelCombinators(selector: string): string[] {
+  const combinators: string[] = [];
+  const trimmed = selector.trim();
   let depth = 0;
-  for (let index = 0; index < selector.length; index += 1) {
-    const char = selector[index];
+  let pending: string | null = null;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    if (depth === 0 && /[\s>+~]/.test(char)) {
+      pending = /\s/.test(char) ? (pending ?? " ") : char;
+      continue;
+    }
+    if (pending !== null) {
+      combinators.push(pending);
+      pending = null;
+    }
     if (char === "\\") {
       index += 1;
       continue;
     }
     if (char === '"' || char === "'") {
-      index = findStringEnd(selector, index);
+      index = findStringEnd(trimmed, index);
       continue;
     }
     if (char === "(" || char === "[") depth += 1;
     else if (char === ")" || char === "]") depth -= 1;
-    else if (depth === 0 && /[\s>+~]/.test(char)) return true;
   }
-  return false;
+  return combinators;
 }
 
 function findParenEnd(selector: string, openIndex: number): number {
