@@ -183,10 +183,10 @@ describe("plugin app bundles (build policy, inventory, asset routes)", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
     const cssText = await css.text();
     expect(cssText).toContain("line-clamp-2");
-    const scope =
-      ":where([data-bb-plugin=appy],[data-bb-plugin-root]:not([data-bb-plugin]))";
-    expect(cssText).toContain(`${scope} .line-clamp-2`);
-    expect(cssText).toContain(`${scope}.line-clamp-2`);
+    expect(cssText).toContain(":where([data-bb-plugin=appy]) .line-clamp-2");
+    expect(cssText).toContain(
+      ":where([data-bb-plugin=appy],[data-bb-plugin-root]:not([data-bb-plugin])).line-clamp-2",
+    );
     expect(cssText).not.toMatch(/@layer utilities\{\./);
 
     const gzipCss = await harness.app.request(`${BASE}${bundle.cssUrl}`, {

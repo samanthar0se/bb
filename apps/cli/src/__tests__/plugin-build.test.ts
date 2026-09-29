@@ -144,10 +144,10 @@ describe("buildPluginApp", () => {
     expect(css).toContain("--text-sm:.8125rem");
     expect(css).toContain(".animate-in");
     expect(css).toContain(".fade-in-0");
-    const scope =
-      ":where([data-bb-plugin=fixture],[data-bb-plugin-root]:not([data-bb-plugin]))";
-    expect(css).toContain(`${scope} .animate-in`);
-    expect(css).toContain(`${scope}.animate-in`);
+    expect(css).toContain(":where([data-bb-plugin=fixture]) .animate-in");
+    expect(css).toContain(
+      ":where([data-bb-plugin=fixture],[data-bb-plugin-root]:not([data-bb-plugin])).animate-in",
+    );
     expect(css).not.toContain("@scope");
 
     const meta = JSON.parse(await readFile(result.metaPath, "utf8"));
@@ -188,10 +188,7 @@ describe("buildPluginApp", () => {
     expect(css.indexOf(".fixture-highlight{")).toBeGreaterThan(
       css.lastIndexOf("@layer utilities{"),
     );
-    const scope =
-      ":where([data-bb-plugin=fixture],[data-bb-plugin-root]:not([data-bb-plugin]))";
-    expect(css).not.toContain(`${scope} .fixture-highlight`);
-    expect(css).not.toContain(`${scope}.fixture-highlight`);
+    expect(css).not.toMatch(/:where\([^{}]*\)\s?\.fixture-highlight/);
   });
 
   it("throws at import time without the BB runtime and loads once slots are set", async () => {
@@ -382,9 +379,9 @@ describe("buildPluginApp", () => {
     expect(css).toContain(".rounded-md");
 
     (globalThis as { __bbPluginRuntime?: unknown }).__bbPluginRuntime = {
-      react: createRequire(new URL("../../../app/package.json", import.meta.url))(
-        "react",
-      ),
+      react: createRequire(
+        new URL("../../../app/package.json", import.meta.url),
+      )("react"),
       reactDom: {},
       jsxRuntime: { jsx: () => ({}), jsxs: () => ({}), Fragment: {} },
       classVarianceAuthority: { cva: () => () => "" },

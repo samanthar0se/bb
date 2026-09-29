@@ -296,17 +296,21 @@ describe("plugin app runtime shim", () => {
     );
     const css = await readFile(result.cssPath, "utf8");
 
-    const scope =
+    const own = ":where([data-bb-plugin=css-fixture])";
+    const fallback = ":where([data-bb-plugin-root]:not([data-bb-plugin]))";
+    const self =
       ":where([data-bb-plugin=css-fixture],[data-bb-plugin-root]:not([data-bb-plugin]))";
-    expect(css).toContain(`${scope} .flex-col,${scope}.flex-col{`);
+    expect(css).toContain(
+      `${own} .flex-col,${fallback} .flex-col,${self}.flex-col{`,
+    );
     const sibling = String.raw`.\[\&\~\*\]\:hidden`;
-    expect(css).toContain(`${scope} ${sibling}~*`);
-    expect(css).not.toContain(`${scope}${sibling}`);
-    expect(css).toContain(`${scope} .hover\\:underline:hover`);
-    expect(css).toContain(String.raw`${scope} .\[\&_svg\]\:size-4 svg`);
+    expect(css).toContain(`${own} ${sibling}~*`);
+    expect(css).not.toContain(`${self}${sibling}`);
+    expect(css).toContain(`${own} .hover\\:underline:hover`);
+    expect(css).toContain(String.raw`${own} .\[\&_svg\]\:size-4 svg`);
     expect(css).not.toMatch(/:is\(:where\(\[data-bb-plugin/);
     expect(css).not.toContain("@scope");
-    expect(css).not.toContain(`${scope} .bb71-authored-decoration`);
+    expect(css).not.toContain(`${own} .bb71-authored-decoration`);
     expect(css).toContain(".bb71-authored-decoration");
   });
 

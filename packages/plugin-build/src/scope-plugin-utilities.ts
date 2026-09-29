@@ -12,12 +12,26 @@ interface Statement {
   body: string | null;
 }
 
-export function pluginScopeRoots(pluginId: string): string {
-  return `[data-bb-plugin="${pluginId}"], [data-bb-plugin-root]:not([data-bb-plugin])`;
+interface Scope {
+  ancestors: string[];
+  self: string;
 }
 
-export function scopePluginUtilities(css: string, scopeRoots: string): string {
-  const scope = `:where(${scopeRoots})`;
+export function pluginScopeRoots(pluginId: string): string[] {
+  return [
+    `[data-bb-plugin="${pluginId}"]`,
+    "[data-bb-plugin-root]:not([data-bb-plugin])",
+  ];
+}
+
+export function scopePluginUtilities(
+  css: string,
+  scopeRoots: readonly string[],
+): string {
+  const scope: Scope = {
+    ancestors: scopeRoots.map((root) => `:where(${root})`),
+    self: `:where(${scopeRoots.join(",")})`,
+  };
 
   return splitStatements(css)
     .map((statement) => {
@@ -55,7 +69,7 @@ function isUtilitiesLayer(prelude: string): boolean {
   return /^@layer\s+utilities$/.test(prelude.trim());
 }
 
-function scopeStatements(css: string, scope: string): string {
+function scopeStatements(css: string, scope: Scope): string {
   return splitStatements(css)
     .map((statement) => {
       if (statement.body === null) return statement.prelude;
@@ -80,7 +94,7 @@ function scopeStatements(css: string, scope: string): string {
 
 function scopeSelector(
   selector: string,
-  scope: string,
+  scope: Scope,
   allowSelfArm: boolean,
 ): string[] {
   const wrapper = /^:(?:where|is)\(/.exec(selector);
@@ -96,9 +110,12 @@ function scopeSelector(
       );
     }
   }
+  const descendants = scope.ancestors.map(
+    (ancestor) => `${ancestor} ${selector}`,
+  );
   return allowSelfArm && !hasSiblingCombinator(selector)
-    ? [`${scope} ${selector}`, `${scope}${selector}`]
-    : [`${scope} ${selector}`];
+    ? [...descendants, `${scope.self}${selector}`]
+    : descendants;
 }
 
 function splitStatements(css: string): Statement[] {
