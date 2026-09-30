@@ -1,5 +1,23 @@
 # Configuration and skill management
 
+## Main instance on this machine
+
+`bb main-instance set --checkout <absolute-path> --data-dir <absolute-path>
+--server-port <port> --host-daemon-port <port>` registers the source checkout
+and main server in `~/.bb-main-instance.json`. `--node-path` selects the Node
+executable and `--server-bind-host` selects `127.0.0.1` or `0.0.0.0`.
+`bb main-instance show --json` reads it; `bb main-instance clear` removes the
+preference without stopping BB or deleting its data. These are host-local
+commands and require no server connection.
+
+Ordinary launches attach to the registered server or start its source checkout.
+They fail without creating another store when the main server conflicts or is
+unresponsive. Source dry runs print the target without preparation. CLI/Node
+SDK defaults also use the main endpoint; explicit remote URLs remain supported.
+Use `BB_ISOLATED_INSTANCE=1` on both a QA launch and its source CLI commands
+to retain checkout-specific isolation. Never restart the main server as a QA
+shortcut. Older installed builds do not read this preference.
+
 ## Environment Setup And Teardown Scripts
 
 - To make a repo work with bb worktrees, run `bb guide environments`. It

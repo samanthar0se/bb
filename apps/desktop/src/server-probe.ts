@@ -26,6 +26,7 @@ export type ServerProbeFetch = (
 
 export interface CompatibleServerProbeResult {
   dataDir: string | null;
+  hostDaemonPort: number;
   kind: "compatible";
   serverUrl: string;
 }
@@ -216,6 +217,7 @@ export async function probeBbServer(
 
   return {
     dataDir: configResult.value.dataDir ?? null,
+    hostDaemonPort: configResult.value.hostDaemonPort,
     kind: "compatible",
     serverUrl: args.serverUrl,
   };

@@ -6,6 +6,15 @@ This index lists every command path that the core CLI registers, including alias
 
 - `bb status`
 
+## main-instance
+
+- `bb main-instance`
+- `bb main-instance show`
+- `bb main-instance set`
+- `bb main-instance clear`
+
+These local commands manage the machine's default launch target without a running server. See [configuration.md](configuration.md) for the registration fields and explicit isolation override.
+
 ## settings
 
 - `bb settings`

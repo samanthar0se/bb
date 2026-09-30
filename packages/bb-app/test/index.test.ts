@@ -1084,6 +1084,68 @@ describe("bb-app launcher", () => {
     }
   });
 
+  it.each(["local", "managed"] as const)(
+    "keeps main instance selectors pinned in %s mode after loading saved overrides",
+    async (serverUrlMode) => {
+      const dataDir = mkdtempSync(join(tmpdir(), "bb-app-main-policy-"));
+      try {
+        writeFileSync(
+          join(dataDir, "config.json"),
+          JSON.stringify({ serverUrl: "https://wrong.example" }),
+        );
+        writeFileSync(
+          join(dataDir, "env.json"),
+          JSON.stringify({
+            env: {
+              BB_DATA_DIR: join(dataDir, "wrong-store"),
+              BB_SERVER_PORT: "48886",
+              BB_HOST_DAEMON_PORT: "48887",
+              BB_DEV_APP_PORT: "4173",
+              BB_SERVER_BIND_HOST: "0.0.0.0",
+              BB_MAIN_INSTANCE_STARTING: "1",
+              BB_APP_URL: "https://main.example",
+            },
+          }),
+        );
+        const runtime = await resolveBbAppRuntimeState({
+          entrypointUrl: pathToFileURL("/repo/packages/bb-app/dist/bb-app.js")
+            .href,
+          env: { BB_DATA_DIR: dataDir },
+          homeDir: "/home/tester",
+          options: { help: false },
+          serverUrlMode,
+          mainInstance: {
+            checkoutPath: "/repo",
+            dataDir,
+            nodePath: process.execPath,
+            serverPort: 47886,
+            hostDaemonPort: 47887,
+            serverBindHost: "127.0.0.1",
+          },
+        });
+        expect(runtime.context).toMatchObject({
+          dataDir,
+          serverPort: 47886,
+          daemonPort: 47887,
+          serverUrl: "http://127.0.0.1:47886",
+        });
+        for (const env of [runtime.env, runtime.serverEnv]) {
+          expect(env).toMatchObject({
+            BB_DATA_DIR: dataDir,
+            BB_SERVER_PORT: "47886",
+            BB_HOST_DAEMON_PORT: "47887",
+            BB_SERVER_BIND_HOST: "127.0.0.1",
+            BB_APP_URL: "https://main.example",
+          });
+          expect(env.BB_DEV_APP_PORT).toBeUndefined();
+          expect(env.BB_MAIN_INSTANCE_STARTING).toBeUndefined();
+        }
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("uses launcher flags over managed config and ambient server URL", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "bb-app-flag-config-"));
     writeFileSync(

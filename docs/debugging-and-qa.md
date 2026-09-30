@@ -1,5 +1,7 @@
 # Debugging And QA
 
+With a configured main instance, source and desktop launches reuse that server. Set `BB_ISOLATED_INSTANCE=1` when following the separate development or QA launch recipes below.
+
 - `pnpm dev` prints the active frontend URL, server API URL, host daemon port, data dir, and logs dir. Do not assume fixed dev ports.
 - `pnpm start:worktree` builds production artifacts and serves the optimized app bundle from the checkout-specific dev server URL, while keeping the same dev data directory and deterministic server/host-daemon ports. It has no Vite dev server or hot reload.
 - `pnpm start:worktree-remote` is the trusted-network variant of `pnpm start:worktree`; it binds that server to all IPv4 interfaces.
@@ -78,6 +80,11 @@ is pending. Try again shortly.” until removal completes. Provider cleanup is n
 awaited by this admission repair, and startup does not scan for abandoned claims.
 
 ## Local Dev QA
+
+If `bb main-instance show --json` reports a registered main server, use
+`BB_ISOLATED_INSTANCE=1` for each QA launch and source CLI invocation below.
+Otherwise the launch reuses the main server. Keep the override inside the QA
+shell so ordinary CLI and app launches continue to target the main instance.
 
 Run `pnpm dev` from this checkout and keep it running in a terminal. It prints
 the checkout-specific URLs, data directory, and logs directory. Stop it with

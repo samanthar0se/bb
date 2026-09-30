@@ -22,6 +22,20 @@ any point, or hand off to another agent.
 
 ## Quick Start
 
+To reuse one source instance across ordinary launches, register it with
+`bb main-instance set --checkout /absolute/path/to/bb --data-dir
+/absolute/path/to/.bb --server-port 38886 --host-daemon-port 38887`.
+`bb main-instance show --json` inspects the machine preference, and
+`bb main-instance clear` removes it without deleting data. Launchers attach to
+that server or start its registered checkout. Use `BB_ISOLATED_INSTANCE=1`
+for a deliberately separate development instance. Builds predating this
+feature do not honor the preference.
+
+The Node SDK exports `readMainInstanceConfig`, `writeMainInstanceConfig`,
+`clearMainInstanceConfig`, and the `MainInstanceConfig` type for local
+preference management. CLI and Node SDK default connections use the main
+server; explicit remote URLs remain supported.
+
 bb runs from npm and orchestrates coding agents you already have installed.
 
 ### Prerequisites

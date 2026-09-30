@@ -3,6 +3,11 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runMainInstanceLauncher } from "../packages/config/src/main-instance-launch.ts";
+import {
+  mainInstanceProcessEnv,
+  resolveMainInstanceConfig,
+} from "../packages/config/src/main-instance.ts";
 import {
   stopProcessGroupLeaderFirst,
   supportsProcessGroups,
@@ -36,8 +41,6 @@ export async function runBuildProcess(request) {
   };
   const handleSigint = () => stopChild();
   const handleSigterm = () => stopChild();
-  // Register before spawn so a child that becomes ready immediately cannot
-  // prompt another process to signal us before the handlers exist.
   process.on("SIGINT", handleSigint);
   process.on("SIGTERM", handleSigterm);
 
@@ -98,8 +101,6 @@ export async function runNativeModulePreflight({
   nodePath = process.execPath,
   scriptPath = resolve(repoRoot, "scripts/ensure-native-modules.mjs"),
 } = {}) {
-  // Each check needs a fresh module cache. The process group also lets the
-  // launcher stop a blocked download or source build during shutdown.
   const result = await runBuildProcess({
     args: [scriptPath, ...(checkOnly ? ["--check"] : [])],
     command: nodePath,
@@ -135,6 +136,25 @@ export async function prepareRuntime() {
 export async function main(args = process.argv.slice(2)) {
   const dryRun = args.includes("--dryrun");
   const parsedArgs = parseStartBbArgs(args.filter((arg) => arg !== "--dryrun"));
+  const firstArg = parsedArgs.cliArgs[0];
+  const startup =
+    firstArg === undefined || firstArg === "start" || firstArg.startsWith("-");
+  if (startup && !args.includes("--help") && !args.includes("-h")) {
+    if (await runMainInstanceLauncher({ sourceCheckoutPath: repoRoot, dryRun }))
+      return;
+    const mainInstance = resolveMainInstanceConfig({
+      env: process.env,
+      homeDir: homedir(),
+    });
+    if (mainInstance !== null) {
+      const mainEnv = mainInstanceProcessEnv(mainInstance, process.env);
+      mainEnv.BB_MAIN_INSTANCE_STARTING = "1";
+      for (const key of Object.keys(process.env)) {
+        if (!(key in mainEnv)) delete process.env[key];
+      }
+      Object.assign(process.env, mainEnv);
+    }
+  }
   await prepareRuntime();
   if (
     parsedArgs.cliArgs.includes("--help") ||

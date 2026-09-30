@@ -68,6 +68,11 @@ import {
 } from "./bb-process.js";
 import { openExistingServerDialog } from "./existing-server-dialog.js";
 import {
+  mainInstanceProcessEnv,
+  mainInstanceServerUrl,
+  resolveMainInstanceConfig,
+} from "@bb/config/main-instance";
+import {
   readForeignRuntimeDetails,
   stopForeignRuntime,
 } from "./foreign-runtime.js";
@@ -1750,9 +1755,7 @@ async function selectBuiltinServer(): Promise<void> {
   await applyServerTarget();
 }
 
-async function loadServerMovedView(
-  move: DesktopServerMove,
-): Promise<void> {
+async function loadServerMovedView(move: DesktopServerMove): Promise<void> {
   await loadActionView({
     actions: [
       { id: "open-moved-server", label: `Open ${move.toHostName}` },
@@ -2474,13 +2477,17 @@ async function spawnOwnedRuntime(
 async function startOwnedRuntime(
   args: StartOwnedRuntimeArgs,
 ): Promise<DesktopRuntime | null> {
+  const mainInstance = resolveMainInstanceConfig({
+    env: process.env,
+    homeDir: homedir(),
+  });
   const { bbProcess, runtime } = await spawnOwnedRuntime(args);
 
   const raceResult = await Promise.race<StartupRaceResult>([
     waitForCompatibleServer({
       intervalMs: STARTUP_POLL_INTERVAL_MS,
       serverUrl: args.serverUrl,
-      timeoutMs: STARTUP_TIMEOUT_MS,
+      timeoutMs: mainInstance === null ? STARTUP_TIMEOUT_MS : 300_000,
     }).then((result) => ({
       kind: "server-probe",
       result,
@@ -2492,6 +2499,26 @@ async function startOwnedRuntime(
   ]);
 
   if (raceResult.kind === "process-exited") {
+    if (raceResult.exit.code === 0 && mainInstance !== null) {
+      const probe = await probeBbServer({
+        serverUrl: args.serverUrl,
+        timeoutMs: ATTACH_PROBE_TIMEOUT_MS,
+      });
+      if (
+        probe.kind === "compatible" &&
+        probe.dataDir === mainInstance.dataDir &&
+        probe.hostDaemonPort === mainInstance.hostDaemonPort
+      ) {
+        const attached: DesktopRuntime = {
+          bbProcess: null,
+          ownership: "attached",
+          serverUrl: args.serverUrl,
+          userDataPath: null,
+        };
+        setCurrentRuntime(attached);
+        return attached;
+      }
+    }
     await loadStartupError({
       details: `bb-app exited before the server was ready with ${formatExitResult(
         raceResult.exit,
@@ -2505,6 +2532,20 @@ async function startOwnedRuntime(
   }
 
   if (raceResult.result.kind === "compatible") {
+    if (
+      mainInstance !== null &&
+      (raceResult.result.dataDir !== mainInstance.dataDir ||
+        raceResult.result.hostDaemonPort !== mainInstance.hostDaemonPort)
+    ) {
+      await loadStartupError({
+        details: `The server at ${args.serverUrl} does not match the registered main BB instance.`,
+        logs: bbProcess.logs.text(),
+        actions: [],
+        title: "Main BB instance mismatch",
+      });
+      await stopOwnedRuntime();
+      return null;
+    }
     return runtime;
   }
 
@@ -2641,6 +2682,23 @@ async function initializeRuntime(args: InitializeRuntimeArgs): Promise<void> {
   });
 
   if (existingProbe.kind === "compatible") {
+    const mainInstance = resolveMainInstanceConfig({
+      env: process.env,
+      homeDir: homedir(),
+    });
+    if (
+      mainInstance !== null &&
+      (existingProbe.dataDir !== mainInstance.dataDir ||
+        existingProbe.hostDaemonPort !== mainInstance.hostDaemonPort)
+    ) {
+      await loadStartupError({
+        details: `The server at ${args.serverUrl} does not match the registered main BB instance.`,
+        logs: "",
+        actions: [],
+        title: "Main BB instance mismatch",
+      });
+      return;
+    }
     const decision = await decideOnExistingServer(existingProbe);
     if (decision === "quit") {
       app.quit();
@@ -2701,6 +2759,20 @@ async function initializeRuntime(args: InitializeRuntimeArgs): Promise<void> {
 }
 
 async function runDesktopApp(): Promise<void> {
+  const mainInstance = resolveMainInstanceConfig({
+    env: process.env,
+    homeDir: homedir(),
+  });
+  if (mainInstance !== null) {
+    const mainEnv = mainInstanceProcessEnv(mainInstance, process.env);
+    for (const key of Object.keys(process.env)) {
+      if (!(key in mainEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, mainEnv, {
+      BB_DESKTOP_APP_URL: mainInstanceServerUrl(mainInstance),
+      BB_DESKTOP_ATTACH_WITHOUT_PROMPT: "1",
+    });
+  }
   ensurePackagedUserShellPath({
     env: process.env,
     isPackaged: app.isPackaged,
@@ -2861,6 +2933,7 @@ async function runDesktopApp(): Promise<void> {
     storagePath: join(userDataPath, SERVER_TARGET_FILE_NAME),
   });
   await serverTargetStore.load();
+  if (mainInstance !== null) await serverTargetStore.setTarget("builtin");
   const dataDir = resolveDataDirFromEnv({
     env: process.env,
     homeDir: homedir(),

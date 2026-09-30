@@ -10,6 +10,10 @@ workspace, or execution selection is not already established.
 
 ## Start with context
 
+For local startup preferences or deliberately isolated QA launches, read
+references/configuration.md, “Main instance on this machine,” before launching
+or retargeting BB.
+
 ```sh
 bb status --json
 ```

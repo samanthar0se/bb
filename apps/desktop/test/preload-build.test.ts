@@ -376,6 +376,7 @@ describe("desktop build", () => {
       const stderr: string[] = [];
       const childEnv: NodeJS.ProcessEnv = {
         ...process.env,
+        BB_ISOLATED_INSTANCE: "1",
         BB_DATA_DIR: join(smokeRoot, "data"),
         BB_DESKTOP_AUTO_UPDATE: "0",
         BB_DESKTOP_OPEN_DEVTOOLS: "0",

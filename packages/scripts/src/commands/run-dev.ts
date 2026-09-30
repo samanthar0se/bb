@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
+import { runMainInstanceLauncher } from "@bb/config/main-instance-launch";
 import {
   resolveCurrentDevInstanceConfig,
   toDevProcessEnv,
@@ -156,6 +157,8 @@ async function main(): Promise<void> {
       "--dryrun is supported by pnpm start and pnpm start:worktree.",
     );
   }
+  if (await runMainInstanceLauncher({ sourceCheckoutPath: repoRoot, dryRun }))
+    return;
   const resolvedRepoRoot = await resolveExistingRepoRoot();
   const config = resolveCurrentDevInstanceConfig(resolvedRepoRoot);
   if (!dryRun) {

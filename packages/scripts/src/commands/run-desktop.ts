@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
+import { runMainInstanceLauncher } from "@bb/config/main-instance-launch";
 import {
   resolveCurrentDevInstanceConfig,
   toDevProcessEnv,
@@ -120,7 +121,9 @@ function formatConfig(
     return `${prefix} Packaged desktop app with its installed data directory and ports`;
   }
   if (desktopUserDataDir === undefined) {
-    throw new Error("[desktop:worktree] Electron user data directory is missing");
+    throw new Error(
+      "[desktop:worktree] Electron user data directory is missing",
+    );
   }
   return [
     `${prefix} Instance ${config.instanceId}`,
@@ -173,6 +176,10 @@ async function resolveExistingRepoRoot(): Promise<string> {
 
 async function main(): Promise<void> {
   const mode = resolveDesktopLaunchMode(process.argv.slice(2));
+  if (
+    await runMainInstanceLauncher({ sourceCheckoutPath: null, dryRun: false })
+  )
+    return;
   const resolvedRepoRoot = await resolveExistingRepoRoot();
   const config = resolveCurrentDevInstanceConfig(resolvedRepoRoot);
   if (mode === "worktree") {

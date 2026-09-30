@@ -89,6 +89,7 @@ describe("probeBbServer", () => {
       }),
     ).resolves.toEqual({
       dataDir: "/Users/example/.bb",
+      hostDaemonPort: 4_242,
       kind: "compatible",
       serverUrl: "https://studio.example",
     });
@@ -146,6 +147,7 @@ describe("probeBbServer", () => {
       probeBbServer({ serverUrl: testServer.url, timeoutMs: 500 }),
     ).resolves.toEqual({
       dataDir: null,
+      hostDaemonPort: 38887,
       kind: "compatible",
       serverUrl: testServer.url,
     });
@@ -196,6 +198,7 @@ describe("waitForCompatibleServer", () => {
       }),
     ).resolves.toEqual({
       dataDir: null,
+      hostDaemonPort: 4_242,
       kind: "compatible",
       serverUrl: "http://127.0.0.1:65535",
     });

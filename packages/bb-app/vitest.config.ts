@@ -6,6 +6,7 @@ import {
 export default defineWorkspaceTestConfig({
   test: {
     environment: "node",
+    env: { BB_ISOLATED_INSTANCE: "1" },
     projects: sharedWorkerProjects({
       pkgDir: __dirname,
       name: "bb-app",

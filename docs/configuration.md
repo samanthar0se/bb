@@ -1514,6 +1514,48 @@ directory and reused by subsequent runs. Its generated command accepts
 
 ## Source Development
 
+### Main instance on this machine
+
+Register a preferred source checkout and server with `bb main-instance set`:
+
+```bash
+bb main-instance set --checkout /absolute/path/to/bb --data-dir /absolute/path/to/.bb --server-port 38886 --host-daemon-port 38887
+bb main-instance show --json
+```
+
+The preference is stored atomically in `~/.bb-main-instance.json`. It contains
+`checkoutPath`, `dataDir`, `nodePath`, `serverPort`, `hostDaemonPort`, and
+`serverBindHost`. The directories, Node executable, and checkout's
+`scripts/start-bb.mjs` must exist when registering. `--node-path` defaults to
+the CLI's Node executable; `--server-bind-host` defaults to `127.0.0.1` and
+also accepts `0.0.0.0`. Use the latter only on a trusted network.
+
+With a preference, ordinary source startup, `pnpm dev`, `pnpm start:worktree`,
+`pnpm desktop`, `pnpm desktop:worktree`,
+`bb-app`, `bb-server`, and desktop startup reuse the main server. Startup
+checks the server's data directory and daemon port before attaching. When it
+is offline, the launcher starts only the registered source checkout with its
+registered data directory and ports. A startup lock prevents concurrent
+preparations. An unresponsive live launcher, malformed preference, conflicting
+server, or unavailable checkout fails without creating an alternative store.
+Desktop starts on the main local server and attaches without a replacement
+prompt. Standalone CLI and Node SDK defaults use its URL and daemon port;
+explicit `BB_SERVER_URL` or SDK `baseUrl` still supports remote clients.
+Source desktop launch commands reuse the main server without repackaging;
+set the isolation override when intentionally packaging a separate desktop.
+
+Set `BB_ISOLATED_INSTANCE=1` for a deliberately separate development or QA
+launch, for example `BB_ISOLATED_INSTANCE=1 pnpm dev`. This bypasses the
+preference and retains normal checkout-specific defaults. Any other value
+besides `0` is rejected. Source `--dryrun` with a main preference prints the
+registered startup target without preparing or starting it. `bb main-instance
+clear` removes only the preference; it does not delete data or stop servers.
+Older BB builds that predate this preference do not honor it.
+
+The Node package also exports `readMainInstanceConfig()`,
+`writeMainInstanceConfig(config)`, and `clearMainInstanceConfig()` from
+`bb-app`. These operate on the calling machine, without a server request.
+
 For source development only, `pnpm dev`, `pnpm start:worktree`,
 `pnpm start:worktree-remote`, `pnpm start:worktree --dryrun`,
 and `pnpm start` load the repo-root dotenv

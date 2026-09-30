@@ -48,6 +48,14 @@ repo-level `.bb-env-setup.sh` and `.bb-env-teardown.sh` hooks. Run `bb guide
 agent-configuration` for the data-dir and workspace files that customize agent
 behavior.
 
+To keep ordinary launches on one local server, use `bb main-instance set
+--checkout /absolute/path/to/bb --data-dir /absolute/path/to/.bb
+--server-port 38886 --host-daemon-port 38887`. `bb main-instance show --json`
+inspects the machine preference; `bb main-instance clear` removes it without
+deleting data. Launchers reuse that server or start its registered checkout.
+`BB_ISOLATED_INSTANCE=1` explicitly bypasses it for separate development/QA.
+Run `bb guide commands main-instance` for every option.
+
 Run `bb guide <chapter>` for command details:
 
   threads              Spawning, inspecting, messaging, and managing threads

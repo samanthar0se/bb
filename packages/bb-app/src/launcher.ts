@@ -92,6 +92,13 @@ import {
   type AppUpdateMode,
 } from "@bb/config/app-update";
 import { z } from "zod";
+import { runMainInstanceLauncher } from "@bb/config/main-instance-launch";
+import {
+  mainInstanceProcessEnv,
+  mainInstanceServerUrl,
+  resolveMainInstanceConfig,
+  type MainInstanceConfig,
+} from "@bb/config/main-instance";
 import {
   createLauncherAppUpdateController,
   type LauncherAppUpdateController,
@@ -680,6 +687,7 @@ interface ApplyManagedConfigEnvArgs {
 }
 
 interface ResolveBbAppRuntimeStateArgs {
+  mainInstance?: MainInstanceConfig;
   entrypointUrl: string;
   env: NodeJS.ProcessEnv;
   homeDir: string;
@@ -1352,10 +1360,23 @@ export async function resolveBbAppRuntimeState(
     envFile,
     env: initialEnv,
   });
-  const applyRuntimePolicy = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
-    args.worktreePolicy === undefined
-      ? env
-      : applyWorktreeRuntimePolicy(env, args.worktreePolicy);
+  const applyRuntimePolicy = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
+    if (args.mainInstance === undefined)
+      return args.worktreePolicy === undefined
+        ? env
+        : applyWorktreeRuntimePolicy(env, args.worktreePolicy);
+    const mainEnv: NodeJS.ProcessEnv = {
+      ...env,
+      BB_DATA_DIR: args.mainInstance.dataDir,
+      BB_SERVER_PORT: String(args.mainInstance.serverPort),
+      BB_HOST_DAEMON_PORT: String(args.mainInstance.hostDaemonPort),
+      BB_SERVER_BIND_HOST: args.mainInstance.serverBindHost,
+      BB_SERVER_URL: mainInstanceServerUrl(args.mainInstance),
+    };
+    delete mainEnv.BB_DEV_APP_PORT;
+    delete mainEnv.BB_MAIN_INSTANCE_STARTING;
+    return mainEnv;
+  };
   const managedEnv = applyRuntimePolicy(persistedEnv);
 
   if (args.serverUrlMode === "local") {
@@ -1384,7 +1405,7 @@ export async function resolveBbAppRuntimeState(
     };
   }
 
-  const finalEnv = {
+  const finalEnv = applyRuntimePolicy({
     ...managedEnv,
     BB_SERVER_URL: resolveServerUrl({
       config,
@@ -1392,7 +1413,7 @@ export async function resolveBbAppRuntimeState(
       env: managedEnv,
       optionServerUrl: args.options.serverUrl,
     }),
-  };
+  });
   return {
     config,
     context: resolveBbAppStartContext({
@@ -2625,11 +2646,29 @@ export async function runBundledCliCommand(
 export async function runBbCli(
   cliArgs: string[] = process.argv.slice(2),
 ): Promise<void> {
+  const mainInstance =
+    cliArgs[0] === "main-instance" || process.env.BB_SERVER_URL !== undefined
+      ? null
+      : resolveMainInstanceConfig({
+          env: process.env,
+          homeDir: homedir(),
+        });
+  const env =
+    mainInstance !== null
+      ? {
+          ...process.env,
+          BB_DATA_DIR: mainInstance.dataDir,
+          BB_SERVER_PORT: String(mainInstance.serverPort),
+          BB_SERVER_URL: mainInstanceServerUrl(mainInstance),
+          BB_HOST_DAEMON_PORT: String(mainInstance.hostDaemonPort),
+        }
+      : process.env;
   const runtime = await resolveBbAppRuntimeState({
     entrypointUrl: import.meta.url,
-    env: process.env,
+    env,
     homeDir: homedir(),
     options: createDefaultLauncherOptions(),
+    ...(mainInstance === null ? {} : { mainInstance }),
     serverUrlMode: "managed",
   });
   assertBbHostArtifacts(runtime.context);
@@ -2684,6 +2723,10 @@ Exits with code 3 without starting when the server on this data directory moved 
   if (parsedArgs.positionals.length > 0) {
     throw new Error("bb-server does not accept arguments.");
   }
+  if (
+    await runMainInstanceLauncher({ sourceCheckoutPath: null, dryRun: false })
+  )
+    return;
 
   const runtime = await resolveBbAppRuntimeState({
     entrypointUrl: import.meta.url,
@@ -3812,19 +3855,53 @@ export async function runBbApp(
     process.exitCode = 1;
     return;
   }
+  if (command.kind === "start") {
+    const sourceCheckoutPath = runsFromSourceCheckout(import.meta.url)
+      ? resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
+      : null;
+    if (
+      await runMainInstanceLauncher({
+        sourceCheckoutPath,
+        dryRun: options.dryRun === true,
+      })
+    )
+      return;
+  }
+  const mainInstance =
+    command.kind === "host-daemon" || command.kind === "client"
+      ? null
+      : resolveMainInstanceConfig({
+          env: process.env,
+          homeDir: homedir(),
+        });
+  const launchEnv =
+    mainInstance !== null
+      ? mainInstanceProcessEnv(mainInstance, process.env)
+      : process.env;
+  const launchOptions: LauncherCliOptions =
+    mainInstance === null
+      ? parsedArgs.options
+      : {
+          ...parsedArgs.options,
+          dataDir: mainInstance.dataDir,
+          serverPort: String(mainInstance.serverPort),
+          hostDaemonPort: String(mainInstance.hostDaemonPort),
+          serverBindHost: mainInstance.serverBindHost,
+        };
 
   const runtime = await resolveBbAppRuntimeState({
     entrypointUrl: import.meta.url,
-    env: process.env,
+    env: launchEnv,
     homeDir: homedir(),
-    options: parsedArgs.options,
+    options: launchOptions,
+    ...(mainInstance === null ? {} : { mainInstance }),
     serverUrlMode:
       command.kind === "config" ||
       command.kind === "env" ||
       command.kind === "host-daemon"
         ? "managed"
         : "local",
-    ...(options.worktreePolicy === null
+    ...(mainInstance !== null || options.worktreePolicy === null
       ? {}
       : { worktreePolicy: options.worktreePolicy }),
   });
@@ -3942,11 +4019,12 @@ export async function runBbApp(
     }
     const current = await resolveBbAppRuntimeState({
       entrypointUrl: import.meta.url,
-      env: process.env,
+      env: launchEnv,
       homeDir: homedir(),
-      options: parsedArgs.options,
+      options: launchOptions,
+      ...(mainInstance === null ? {} : { mainInstance }),
       serverUrlMode: "local",
-      ...(options.worktreePolicy === null
+      ...(mainInstance !== null || options.worktreePolicy === null
         ? {}
         : { worktreePolicy: options.worktreePolicy }),
     });
