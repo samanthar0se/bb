@@ -17,6 +17,7 @@ afterEach(() => {
 describe("run-cli", () => {
   it("runs the source CLI in development mode without a watched build", () => {
     vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("BB_ISOLATED_INSTANCE", "1");
 
     const execution = resolveCliExecution(["thread", "list"]);
 

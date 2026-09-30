@@ -591,6 +591,7 @@ describe("consumer-specific config", () => {
 
   it("defaults CLI connection env to the local app instance", () => {
     const cliConfig = loadCliConfig({
+      homeDir: "/Users/tester",
       env: {
         NODE_ENV: "development",
       },

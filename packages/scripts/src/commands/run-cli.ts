@@ -1,4 +1,9 @@
 import { resolveCurrentDevProcessEnv } from "@bb/config/runtime";
+import { homedir } from "node:os";
+import {
+  mainInstanceServerUrl,
+  resolveMainInstanceConfig,
+} from "@bb/config/main-instance";
 import { runScriptProcess } from "../lib/process-helpers.js";
 import { repoRoot, runMainIfEntrypoint } from "../lib/script-entry.js";
 
@@ -27,6 +32,17 @@ export function resolveCliExecution(
       "apps/cli/src/index.ts",
       ...forwardedArgs,
     ];
+  }
+  const mainInstance =
+    forwardedArgs[0] === "main-instance"
+      ? null
+      : resolveMainInstanceConfig({
+          env: process.env,
+          homeDir: homedir(),
+        });
+  if (mainInstance !== null && process.env.BB_SERVER_URL === undefined) {
+    env.BB_SERVER_URL = mainInstanceServerUrl(mainInstance);
+    env.BB_HOST_DAEMON_PORT = String(mainInstance.hostDaemonPort);
   }
   return {
     args,

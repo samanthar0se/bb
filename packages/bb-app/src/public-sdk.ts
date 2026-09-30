@@ -7,6 +7,12 @@ import {
   type BbSdk,
   type CreateNodeBbSdkArgs,
 } from "@bb/sdk/node";
+export {
+  readMainInstanceConfig,
+  writeMainInstanceConfig,
+  clearMainInstanceConfig,
+} from "@bb/config/main-instance";
+export type { MainInstanceConfig } from "@bb/config/main-instance";
 import type {
   BbRealtimeSubscribeArgs,
   BbRealtimeSocket,

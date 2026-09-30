@@ -6,6 +6,10 @@ import {
   BB_PROD_SERVER_PORT,
 } from "./runtime.js";
 import { loadServerUrlValue } from "./server-url.js";
+import {
+  mainInstanceServerUrl,
+  resolveMainInstanceConfig,
+} from "./main-instance.js";
 
 export interface CliConfig {
   BB_HOST_DAEMON_PORT: number;
@@ -24,6 +28,16 @@ function hasConfiguredValue(env: NodeJS.ProcessEnv, key: string): boolean {
 
 export function loadCliConfig(args: LoadCliConfigArgs = {}): CliConfig {
   const loader = resolveEnvLoader(args);
+  const mainInstance = resolveMainInstanceConfig({
+    env: loader.env,
+    homeDir: loader.context.homeDir,
+  });
+  if (mainInstance !== null && loader.env.BB_SERVER_URL === undefined) {
+    return {
+      BB_SERVER_URL: mainInstanceServerUrl(mainInstance),
+      BB_HOST_DAEMON_PORT: mainInstance.hostDaemonPort,
+    };
+  }
   const useDevDefaults = loader.mode === "dev" && args.repoRoot !== undefined;
   const serverUrl =
     hasConfiguredValue(loader.env, "BB_SERVER_URL") || useDevDefaults
