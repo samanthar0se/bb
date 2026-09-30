@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createThread } from "@bb/db";
+import { getThreadPluginMetadata } from "@bb/db";
 import { encodeClientTurnRequestIdNumber, type JsonObject } from "@bb/domain";
 import {
   buildExecutionOptions,
@@ -150,13 +150,22 @@ describe("thread plugin metadata in agent configuration", () => {
         path: join(server.config.dataDir, "plugin-metadata-workspace"),
       });
       const seed = launchSeed("BB-42");
-      const thread = createThread(server.db, server.hub, {
+      const thread = await createThreadFromRequest(server.deps, {
+        environment: { type: "reuse", environmentId: environment.id },
+        input: textInput("unsent draft"),
+        draft: true,
+        origin: "app",
+        originKind: null,
+        startedOnBehalfOf: null,
         projectId: project.id,
-        environmentId: environment.id,
         providerId: "codex",
-        originPluginId: "issue-launcher",
-        pluginMetadata: { pluginId: "issue-launcher", metadata: seed },
+        experimental_pluginMetadataByPlugin: {
+          "issue-launcher": seed,
+        },
       });
+      expect(
+        getThreadPluginMetadata(server.db, thread.id, "issue-launcher"),
+      ).toEqual({ metadata: seed, corrupt: false });
       const execution = await buildExecutionOptions(
         server.deps,
         { model: "gpt-5" },
@@ -330,6 +339,32 @@ describe("thread plugin metadata in agent configuration", () => {
         body: {
           code: "invalid_request",
           message: 'pluginMetadata requires origin "plugin"',
+        },
+      });
+      await expect(
+        createThreadFromRequest(harness.deps, {
+          environment: {
+            type: "host",
+            hostId: host.id,
+            workspace: { type: "unmanaged", path: workspacePath },
+          },
+          input: textInput("Plugin-origin composer metadata"),
+          origin: "plugin",
+          originPluginId: "issue-launcher",
+          originKind: null,
+          experimental_pluginMetadataByPlugin: {
+            "issue-launcher": launchSeed("BB-45"),
+          },
+          projectId: project.id,
+          providerId: "codex",
+          startedOnBehalfOf: null,
+        }),
+      ).rejects.toMatchObject({
+        status: 400,
+        body: {
+          code: "invalid_request",
+          message:
+            'experimental_pluginMetadataByPlugin cannot be used with origin "plugin"',
         },
       });
       expect(

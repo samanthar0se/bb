@@ -1502,6 +1502,7 @@ export interface RenderedSlotBehaviorDrivers {
   ): Promise<void>;
   /** Replace composer text as a host-originated edit, wrapped in act. */
   setComposerText(text: string): Promise<void>;
+  setComposerSelectedProviderId(providerId: string | null): Promise<void>;
   /** Replace the scope snapshots returned by composer hooks, wrapped in act. */
   setComposerScope(scope: PluginComposerScope): Promise<void>;
 }
@@ -1870,6 +1871,8 @@ export function renderSlot<
       ? { kind: "thread", threadId }
       : { kind: "new-thread", projectId });
 
+  let composerSelectedProviderId =
+    options.composer?.experimental_selectedProviderId ?? null;
   let composerText = options.composer?.text ?? "";
   const composerAttachmentCount = options.composer?.attachmentCount ?? 0;
   let composerVersion = 0;
@@ -1908,8 +1911,7 @@ export function renderSlot<
   const composer: TestComposerStore = {
     getAttachmentCount: () => composerAttachmentCount,
     getScope: () => composerScope,
-    getSelectedProviderId: () =>
-      options.composer?.experimental_selectedProviderId ?? null,
+    getSelectedProviderId: () => composerSelectedProviderId,
     getText: () => composerText,
     getVersionSnapshot: () => composerVersion,
     subscribe(listener) {
@@ -2118,6 +2120,15 @@ export function renderSlot<
   const setComposerText = async (text: string): Promise<void> => {
     await act(async () => commitComposerText(text));
   };
+  const setComposerSelectedProviderId = async (
+    providerId: string | null,
+  ): Promise<void> => {
+    await act(async () => {
+      if (providerId === composerSelectedProviderId) return;
+      composerSelectedProviderId = providerId;
+      notifyComposerListeners();
+    });
+  };
   const setComposerScope = async (
     scope: PluginComposerScope,
   ): Promise<void> => {
@@ -2139,6 +2150,7 @@ export function renderSlot<
     emitRealtime,
     setRealtimeConnectionState,
     setComposerText,
+    setComposerSelectedProviderId,
     setComposerScope,
     navigateCalls,
     experimental_fixedTabOpenCalls,
@@ -2150,6 +2162,7 @@ export function renderSlot<
       emitRealtime,
       setRealtimeConnectionState,
       setComposerText,
+      setComposerSelectedProviderId,
       setComposerScope,
     },
     inspection: {

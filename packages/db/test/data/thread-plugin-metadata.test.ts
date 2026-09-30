@@ -69,7 +69,7 @@ describe("thread plugin metadata persistence", () => {
     expect(listThreadPluginMetadataRows(db, thread.id, [])).toEqual([]);
   });
 
-  it("seeds every namespace from the app-origin plugin metadata map", () => {
+  it("seeds every namespace from the per-plugin metadata map", () => {
     const { db, project } = setup("multi-seed");
     const thread = createThread(db, noopNotifier, {
       projectId: project.id,

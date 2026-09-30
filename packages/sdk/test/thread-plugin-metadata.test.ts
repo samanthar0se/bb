@@ -32,6 +32,39 @@ function createRecordingSdk() {
 }
 
 describe("thread plugin metadata transport", () => {
+  it.each([
+    [undefined, "sdk"],
+    ["app", "app"],
+    ["cli", "cli"],
+    ["sdk", "sdk"],
+  ] as const)(
+    "preserves %s origin when spawning with per-plugin metadata",
+    async (origin, expectedOrigin) => {
+      const { requests, sdk } = createRecordingSdk();
+
+      await sdk.threads.spawn({
+        projectId: "project",
+        environment: {
+          type: "host",
+          hostId: "host",
+          workspace: { type: "unmanaged", path: null },
+        },
+        input: [{ type: "text", text: "start", mentions: [] }],
+        ...(origin === undefined ? {} : { origin }),
+        experimental_pluginMetadataByPlugin: {
+          linear: { issue: "BB-42" },
+        },
+      });
+
+      expect(requests[0]?.body).toMatchObject({
+        origin: expectedOrigin,
+        experimental_pluginMetadataByPlugin: {
+          linear: { issue: "BB-42" },
+        },
+      });
+    },
+  );
+
   it("serializes the exact GET query and PATCH body", async () => {
     const { requests, sdk } = createRecordingSdk();
 

@@ -761,7 +761,7 @@ function spawnJson(args: ThreadSpawnArgs): CreateThreadRequest {
           ),
         }),
     input: spawnInput(args),
-    origin: origin ?? (args.experimental_pluginMetadataByPlugin === undefined ? "sdk" : "app"),
+    origin: origin ?? "sdk",
     startedOnBehalfOf: startedOnBehalfOf ?? null,
     originKind: originKind ?? null,
   };

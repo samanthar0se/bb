@@ -135,11 +135,12 @@ export const createThreadRequestSchema = z
   .superRefine((value, ctx) => {
     if (
       value.experimental_pluginMetadataByPlugin !== undefined &&
-      value.origin !== "app"
+      value.origin === "plugin"
     ) {
       ctx.addIssue({
         code: "custom",
-        message: 'experimental_pluginMetadataByPlugin requires origin "app"',
+        message:
+          'experimental_pluginMetadataByPlugin cannot be used with origin "plugin"',
         path: ["experimental_pluginMetadataByPlugin"],
       });
     }

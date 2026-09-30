@@ -159,19 +159,20 @@ const commandApproval: PendingInteraction = {
   },
 };
 
-function bannerElement(interaction: PendingInteraction) {
+function bannerElement(interaction: PendingInteraction, hostId?: string) {
   return (
     <ThreadPendingInteractionBanner
+      hostId={hostId}
       interaction={interaction}
       threadId="thr_1"
     />
   );
 }
 
-function renderBanner(interaction: PendingInteraction) {
+function renderBanner(interaction: PendingInteraction, hostId?: string) {
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <MemoryRouter>{bannerElement(interaction)}</MemoryRouter>
+      <MemoryRouter>{bannerElement(interaction, hostId)}</MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -353,6 +354,27 @@ describe("ThreadPendingInteractionBanner request family", () => {
     );
     expandBanner();
     expect(screen.getByText("plans/picker.md")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open plan" })).toBeNull();
+  });
+
+  it("keeps a plan without a file path inline only", () => {
+    const planWithoutFile: PendingInteraction = {
+      ...planReview,
+      payload: {
+        kind: "approval",
+        reason: null,
+        availableDecisions: ["allow_once", "deny"],
+        subject: {
+          kind: "plan",
+          itemId: "plan-1",
+          plan: "# No file",
+          planFilePath: null,
+        },
+      },
+    };
+    renderBanner(planWithoutFile, "host_1");
+    expandBanner();
+    expect(screen.getByText("No file")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open plan" })).toBeNull();
   });
 

@@ -1844,6 +1844,42 @@ describe("renderSlot", () => {
     expect(setPluginMetadata).toHaveBeenCalledWith({ source: "plugin" });
   });
 
+  it("reacts to provider hydration, switches, and composer scope transitions", async () => {
+    const initialScope = { kind: "new-thread", projectId: null } as const;
+    const threadScope = { kind: "thread", threadId: "thr_1" } as const;
+    const slot = renderSlot(
+      app.composerCustomizations[0]!.actions![0]!,
+      {},
+      {
+        composer: {
+          scope: initialScope,
+          experimental_selectedProviderId: null,
+        },
+      },
+    );
+
+    expect(slot.getByTestId("composer-selected-provider").textContent).toBe("");
+
+    await slot.behavior.setComposerSelectedProviderId("codex");
+    expect(slot.getByTestId("composer-selected-provider").textContent).toBe(
+      "codex",
+    );
+
+    await slot.behavior.setComposerSelectedProviderId("claude-code");
+    expect(slot.getByTestId("composer-selected-provider").textContent).toBe(
+      "claude-code",
+    );
+
+    await slot.behavior.setComposerScope(threadScope);
+    expect(slot.composer.scope).toEqual(threadScope);
+    expect(slot.getByTestId("composer-selected-provider").textContent).toBe(
+      "claude-code",
+    );
+
+    await slot.behavior.setComposerSelectedProviderId(null);
+    expect(slot.getByTestId("composer-selected-provider").textContent).toBe("");
+  });
+
   it("reads, replaces, functionally updates, and clears isolated composer text", () => {
     const threadSlot = renderSlot(
       app.composerCustomizations[0]!.actions![0]!,

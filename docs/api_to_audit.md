@@ -2813,13 +2813,20 @@ slots need the same treatment.
 
 ## `ComposerView.experimental_selectedProviderId` (`@get-bb/plugin-sdk/app`)
 
-**Kept experimental.** Reports the effective provider selected in the composer where the plugin is mounted. It is reactive: mounted plugins receive the current value after provider switches, including when a project default differs from the selected value. It is `null` while the host has not resolved a provider, and does not expose provider metadata or server state.
+**Kept experimental.** Reports the effective provider selected in the composer
+where the plugin is mounted. It is reactive: mounted plugins receive the
+current value after provider switches, including when a project default differs
+from the selected value. It is `null` while selection is unresolved or when the
+composer does not supply a selected-provider value. At this revision, the
+selected-provider input is wired in new-thread and follow-up composers; other
+composer surfaces report `null`. It does not expose provider metadata or server
+state.
 
 **Audit before stabilizing.** Confirm the value remains identical across new-thread, follow-up, queued-message, side-chat, and plugin-hosted composers; verify updates on provider switches and project changes; define the unresolved transition and behavior when the selected provider is unavailable; then audit consumers, rename the field project-wide, and remove this entry before dropping the experimental prefix.
 
 ## `ComposerView.experimental_pluginMetadata` and `useComposer().experimental_setPluginMetadata` (`@get-bb/plugin-sdk/app`)
 
-**What it does.** New-thread composer drafts carry a persistent, per-plugin JSON object map keyed by the existing prompt draft storage key. A plugin reads its own namespace through `ComposerView.experimental_pluginMetadata` and writes only its own namespace through `experimental_setPluginMetadata`; empty objects clear it. Unsupported composers expose null. The map is submitted only from the normal app-origin create path and is not exposed in thread responses.
+**What it does.** New-thread composer drafts carry a persistent, per-plugin JSON object map keyed by the existing prompt draft storage key. A plugin reads its own namespace through `ComposerView.experimental_pluginMetadata` and writes only its own namespace through `experimental_setPluginMetadata`; empty objects clear it. Unsupported composers expose null. The map is accepted on app, CLI, and SDK thread creation while preserving the caller's origin; plugin-origin creation cannot use it because plugin callers retain their single-plugin seed. Fork requests reject the map, and it is not exposed in thread responses.
 
 **Audit before stabilizing.** Confirm namespace ownership, reload and provider-switch isolation, aggregate 256 KiB enforcement, and coherent clear/restore behavior under concurrent draft edits. Confirm fork rejection remains clear and preserves the draft.
 

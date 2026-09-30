@@ -54,6 +54,69 @@ describe("plugin metadata contracts", () => {
     ).toEqual(metadata);
   });
 
+  it.each(["app", "cli", "sdk"] as const)(
+    "accepts per-plugin create metadata with %s origin",
+    (origin) => {
+      const metadata = { linear: { issue: "BB-42" } };
+      expect(
+        createThreadRequestSchema.parse({
+          ...createBase,
+          origin,
+          originPluginId: undefined,
+          experimental_pluginMetadataByPlugin: metadata,
+        }),
+      ).toMatchObject({ origin, experimental_pluginMetadataByPlugin: metadata });
+    },
+  );
+
+  it("rejects per-plugin metadata from plugin-origin creates and forks", () => {
+    const metadata = { linear: { issue: "BB-42" } };
+    expect(
+      issuesOf(
+        createThreadRequestSchema.safeParse({
+          ...createBase,
+          experimental_pluginMetadataByPlugin: metadata,
+        }),
+      ),
+    ).toContainEqual({
+      message:
+        'experimental_pluginMetadataByPlugin cannot be used with origin "plugin"',
+      path: ["experimental_pluginMetadataByPlugin"],
+    });
+
+    const fork = forkThreadRequestSchema.safeParse({
+      ...forkBase,
+      experimental_pluginMetadataByPlugin: metadata,
+    });
+    expect(fork.success).toBe(false);
+    expect(issuesOf(fork)).toContainEqual({
+      message: "experimental_pluginMetadataByPlugin cannot be used with forks",
+      path: ["experimental_pluginMetadataByPlugin"],
+    });
+  });
+
+  it.each([
+    { originKind: "fork" as const },
+    { sourceThreadId: "source-thread" },
+  ])("rejects per-plugin metadata when creating from a source: %o", (source) => {
+    expect(
+      issuesOf(
+        createThreadRequestSchema.safeParse({
+          ...createBase,
+          origin: "cli",
+          originPluginId: undefined,
+          experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
+          ...source,
+        }),
+      ),
+    ).toContainEqual({
+      message: source.originKind
+        ? "experimental_pluginMetadataByPlugin cannot be used with originKind"
+        : "experimental_pluginMetadataByPlugin cannot be used with sourceThreadId",
+      path: ["experimental_pluginMetadataByPlugin"],
+    });
+  });
+
   it("rejects pluginMetadata unless origin is plugin", () => {
     expect(
       issuesOf(

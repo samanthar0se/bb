@@ -4,10 +4,11 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderWithoutRouter,
   screen,
   waitFor,
 } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { Profiler, startTransition, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +24,10 @@ import {
 } from "@/components/promptbox/FollowUpPromptBox";
 import { makePluginRegistrationSet } from "@/test/fixtures/plugins";
 import { useComposerView } from "@/lib/plugin-sdk-hooks";
+
+function render(ui: ReactNode) {
+  return renderWithoutRouter(ui, { wrapper: MemoryRouter });
+}
 
 function SelectedProviderProbe() {
   const view = useComposerView();
@@ -504,10 +509,11 @@ describe("FollowUpPromptBox", () => {
 
   it("passes execution provider selection through the production composer view", () => {
     const props = createFollowUpPromptBoxProps({ kind: "ready" });
+    const draft = { text: "Follow up", mentions: [], attachments: [] };
     const pluginComposerHost = {
       scope: { kind: "thread" as const, threadId: "thr_test" },
       textEffectKey: "thread:thr_test",
-      getCurrent: () => ({ text: "Follow up", mentions: [], attachments: [] }),
+      getCurrent: () => draft,
       subscribeDraft: () => () => {},
       setDraft: vi.fn(),
       focus: vi.fn(),

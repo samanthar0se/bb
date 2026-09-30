@@ -67,7 +67,6 @@ import {
 type PromptBoxWithScrollAnchorProps = ComponentProps<
   typeof PromptBoxInternal
 > & {
-  experimental_selectedProviderId?: string | null;
   scrollToBottomOnModifierSubmit?: boolean;
   scrollToBottomOnSubmit?: boolean;
 };
@@ -77,7 +76,6 @@ function PromptBoxWithScrollAnchor({
   scrollToBottomOnModifierSubmit = true,
   scrollToBottomOnSubmit = true,
   submission,
-  experimental_selectedProviderId = null,
   ...promptBoxProps
 }: PromptBoxWithScrollAnchorProps) {
   const bottomAnchor = useBottomAnchoredScroll();
@@ -108,7 +106,6 @@ function PromptBoxWithScrollAnchor({
   return (
     <PromptBoxInternal
       {...promptBoxProps}
-      experimental_selectedProviderId={experimental_selectedProviderId}
       onSubmit={handleSubmit}
       submission={anchoredSubmission}
     />

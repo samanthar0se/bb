@@ -19,6 +19,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import {
   clearPluginDraftMetadataIfCurrentMatches,
+  EMPTY_PLUGIN_DRAFT_METADATA,
   getAllPluginDraftMetadata,
   getPluginDraftMetadata,
   restorePluginDraftMetadataIfEmpty,
@@ -1700,23 +1701,42 @@ export function NewThreadComposer({
         promptDraft.storageKey,
         submittedMetadata,
       );
+      let submittedDraftChanged = false;
+      const unsubscribeDraft = promptDraft.subscribe(() => {
+        submittedDraftChanged = true;
+      });
+      const unsubscribeMetadata = subscribePluginDraftMetadata(
+        promptDraft.storageKey,
+        () => {
+          submittedDraftChanged = true;
+        },
+      );
       try {
         await onSubmit(request);
         clearReuseEnvironment();
       } catch (submitError) {
-        if (clearedSubmittedDraft) {
+        if (
+          !submittedDraftChanged &&
+          clearedSubmittedDraft &&
+          clearedSubmittedMetadata &&
+          isPromptDraftEmpty(promptDraft.getCurrent()) &&
+          Object.keys(getAllPluginDraftMetadata(promptDraft.storageKey))
+            .length === 0
+        ) {
+          if (Object.keys(submittedMetadata).length > 0) {
+            restorePluginDraftMetadataIfEmpty(
+              promptDraft.storageKey,
+              submittedMetadata,
+            );
+          }
           promptDraft.restoreIfEmpty(submittedDraft);
-        }
-        if (clearedSubmittedMetadata) {
-          restorePluginDraftMetadataIfEmpty(
-            promptDraft.storageKey,
-            submittedMetadata,
-          );
         }
         throw submitError;
       } finally {
         isSubmittingRef.current = false;
         setIsSubmitting(false);
+        unsubscribeDraft();
+        unsubscribeMetadata();
       }
     },
     [
@@ -1909,7 +1929,7 @@ export function NewThreadComposer({
       getPluginMetadata: (pluginId) =>
         composerGenerationRef.current === seedSignature
           ? getPluginDraftMetadata(promptDraft.storageKey, pluginId)
-          : {},
+          : EMPTY_PLUGIN_DRAFT_METADATA,
       setPluginMetadata: (pluginId, metadata) => {
         if (composerGenerationRef.current !== seedSignature) return;
         setPluginDraftMetadata(promptDraft.storageKey, pluginId, metadata);

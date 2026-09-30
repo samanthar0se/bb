@@ -49,9 +49,13 @@ import {
   setPluginSlotRegistrations,
 } from "@/lib/plugin-slots";
 import { encodeReuseValue } from "@/components/pickers/environment-picker-value";
-import { useRootComposeReuseEnvironment } from "@/lib/root-compose-selection";
+import {
+  useRootComposeForkSeed,
+  useRootComposeReuseEnvironment,
+} from "@/lib/root-compose-selection";
 import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
 import {
+  getAllPluginDraftMetadata,
   getPluginDraftMetadata,
   setPluginDraftMetadata,
 } from "@/hooks/usePluginDraftMetadataStorage";
@@ -279,6 +283,7 @@ vi.mock("@/hooks/queries/host-queries", () => ({
 }));
 
 vi.mock("@/hooks/queries/system-queries", () => ({
+  findCachedProviderInfo: () => ({ capabilities: { supportsFork: true } }),
   useSystemProviders: () => ({ data: undefined }),
   useSystemProviderStates: () => ({ data: undefined, isPending: false }),
   useKnownProviderModelCatalogScope: () => undefined,
@@ -717,6 +722,8 @@ describe("PluginNewThreadComposer seeding", () => {
     mocks.machineProviders = [];
     mocks.modelsLoading = false;
     mocks.permissionCeiling = undefined;
+    mocks.createThreadMutateAsync.mockReset();
+    mocks.createDraftThreadMutateAsync.mockReset().mockResolvedValue(undefined);
     mocks.environmentProviders = [
       CHECKOUT_PROVIDER,
       MANAGED_WORKTREE_SUGAR_PROVIDER,
@@ -1877,6 +1884,8 @@ describe("PluginNewThreadComposer seeding", () => {
       ),
     );
     await waitFor(() => expect(latestPromptBoxProps().disabled).toBe(false));
+    const emptyMetadata = staleHost.getPluginMetadata("alpha");
+    expect(staleHost.getPluginMetadata("alpha")).toBe(emptyMetadata);
     act(() => staleHost.setPluginMetadata("alpha", { stale: true }));
     const draftKey = getPromptDraftAccessor({
       kind: "plugin-new-thread",
@@ -1891,27 +1900,31 @@ describe("PluginNewThreadComposer seeding", () => {
     const draft = getPromptDraftAccessor({ kind: "new-thread" });
     draft.setDraft({ text: "fork draft", mentions: [], attachments: [] });
     setPluginDraftMetadata(draft.storageKey, "alpha", { fork: true });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    function ForkSeededRootComposeView() {
+      const [, setForkSeed] = useRootComposeForkSeed();
+      useEffect(() => {
+        setForkSeed({
+          environmentId: "env-source",
+          model: "gpt-5.6",
+          permissionMode: "auto",
+          projectId: "proj_1",
+          providerId: "codex",
+          reasoningLevel: "medium",
+          serviceTier: undefined,
+          sourceSeqEnd: undefined,
+          sourceThreadId: "thr_source",
+          sourceThreadTitle: "Source thread",
+        });
+      }, [setForkSeed]);
+      return <RootComposeView />;
+    }
     const router = createMemoryRouter(
-      [{ path: "/", element: <RootComposeView /> }],
-      {
-        initialEntries: [{
-          pathname: "/",
-          state: {
-            focusPrompt: true,
-            forkThreadCreateSeed: {
-              environmentId: "env-source",
-              model: "gpt-5.6",
-              permissionMode: "auto",
-              projectId: "proj_1",
-              providerId: "codex",
-              reasoningLevel: "medium",
-              sourceThreadId: "thr_source",
-              sourceThreadTitle: "Source thread",
-            },
-          },
-        }],
-      },
+      [{ path: "/", element: <ForkSeededRootComposeView /> }],
+      { initialEntries: ["/"] },
     );
     render(
       <Provider>
@@ -1920,13 +1933,153 @@ describe("PluginNewThreadComposer seeding", () => {
         </QueryClientProvider>
       </Provider>,
     );
-    await waitFor(() => expect(screen.getByTestId("new-thread-prompt-box")).toBeTruthy());
+    await waitFor(() => expect(latestPromptBoxProps().disabled).toBe(false));
     await act(async () => {
       latestPromptBoxProps().onSubmit();
     });
     expect(mocks.createThreadMutateAsync).not.toHaveBeenCalled();
     expect(draft.getCurrent().text).toBe("fork draft");
     expect(getPluginDraftMetadata(draft.storageKey, "alpha")).toEqual({ fork: true });
+  });
+
+  it("moves ROOT draft metadata with text into the native draft thread", async () => {
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const draft = getPromptDraftAccessor({ kind: "new-thread" });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter(
+      [
+        { path: "/", element: <RootComposeView /> },
+        { path: "/away", element: <div>away</div> },
+      ],
+      { initialEntries: ["/"] },
+    );
+    render(
+      <Provider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </Provider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("new-thread-prompt-box")).toBeTruthy(),
+    );
+    act(() => {
+      draft.setDraft({ text: "save this draft", mentions: [], attachments: [] });
+      setPluginDraftMetadata(draft.storageKey, "alpha", { mode: "fast" });
+    });
+
+    await act(async () => router.navigate("/away"));
+    await waitFor(() =>
+      expect(mocks.createDraftThreadMutateAsync).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.createDraftThreadMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "save this draft", mentions: [] }],
+        experimental_pluginMetadataByPlugin: {
+          alpha: { mode: "fast" },
+        },
+      }),
+    );
+    expect(draft.getCurrent().text).toBe("");
+    expect(getAllPluginDraftMetadata(draft.storageKey)).toEqual({});
+  });
+
+  it("restores a failed ROOT native draft as an atomic text and metadata pair", async () => {
+    let rejectCreate: ((error: Error) => void) | null = null;
+    mocks.createDraftThreadMutateAsync.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((_resolve, reject) => {
+          rejectCreate = reject;
+        }),
+    );
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const draft = getPromptDraftAccessor({ kind: "new-thread" });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const router = createMemoryRouter(
+      [
+        { path: "/", element: <RootComposeView /> },
+        { path: "/away", element: <div>away</div> },
+      ],
+      { initialEntries: ["/"] },
+    );
+    render(
+      <Provider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </Provider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("new-thread-prompt-box")).toBeTruthy(),
+    );
+    act(() => {
+      draft.setDraft({ text: "save this draft", mentions: [], attachments: [] });
+      setPluginDraftMetadata(draft.storageKey, "alpha", { mode: "fast" });
+    });
+
+    await act(async () => router.navigate("/away"));
+    await waitFor(() =>
+      expect(mocks.createDraftThreadMutateAsync).toHaveBeenCalledTimes(1),
+    );
+    expect(draft.getCurrent().text).toBe("");
+    expect(getAllPluginDraftMetadata(draft.storageKey)).toEqual({});
+    await act(async () => rejectCreate?.(new Error("save failed")));
+    await waitFor(() => {
+      expect(draft.getCurrent().text).toBe("save this draft");
+      expect(getPluginDraftMetadata(draft.storageKey, "alpha")).toEqual({
+        mode: "fast",
+      });
+    });
+  });
+
+  it("does not restore old ROOT draft metadata onto newer draft text", async () => {
+    let rejectCreate: ((error: Error) => void) | null = null;
+    mocks.createDraftThreadMutateAsync.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((_resolve, reject) => {
+          rejectCreate = reject;
+        }),
+    );
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const draft = getPromptDraftAccessor({ kind: "new-thread" });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const router = createMemoryRouter(
+      [
+        { path: "/", element: <RootComposeView /> },
+        { path: "/away", element: <div>away</div> },
+      ],
+      { initialEntries: ["/"] },
+    );
+    render(
+      <Provider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </Provider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("new-thread-prompt-box")).toBeTruthy(),
+    );
+    act(() => {
+      draft.setDraft({ text: "old draft", mentions: [], attachments: [] });
+      setPluginDraftMetadata(draft.storageKey, "alpha", { mode: "old" });
+    });
+
+    await act(async () => router.navigate("/away"));
+    await waitFor(() =>
+      expect(mocks.createDraftThreadMutateAsync).toHaveBeenCalledTimes(1),
+    );
+    draft.setDraft({ text: "new draft", mentions: [], attachments: [] });
+    setPluginDraftMetadata(draft.storageKey, "alpha", { mode: "new" });
+    await act(async () => rejectCreate?.(new Error("save failed")));
+    expect(draft.getCurrent().text).toBe("new draft");
+    expect(getPluginDraftMetadata(draft.storageKey, "alpha")).toEqual({
+      mode: "new",
+    });
   });
 
   it("captures and restores the ROOT text and plugin metadata pair without mixing newer edits", async () => {
@@ -1939,7 +2092,9 @@ describe("PluginNewThreadComposer seeding", () => {
       }),
     );
     window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
     const router = createMemoryRouter([{ path: "/", element: <RootComposeView /> }], { initialEntries: ["/"] });
     render(
       <Provider>
@@ -1948,7 +2103,9 @@ describe("PluginNewThreadComposer seeding", () => {
         </QueryClientProvider>
       </Provider>,
     );
-    await waitFor(() => expect(screen.getByTestId("new-thread-prompt-box")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByTestId("new-thread-prompt-box")).toBeTruthy(),
+    );
     const draft = getPromptDraftAccessor({ kind: "new-thread" });
     act(() => {
       draft.setDraft({ text: "original text", mentions: [], attachments: [] });
@@ -1974,6 +2131,44 @@ describe("PluginNewThreadComposer seeding", () => {
     await waitFor(() => expect(mocks.createThreadMutateAsync).toHaveBeenCalledTimes(2));
     await act(async () => resolveRequest?.({ id: "thr_created" }));
     await waitFor(() => expect(draft.getCurrent().text).toBe(""));
+  });
+
+  it("does not restore submitted metadata onto newer ROOT text after create fails", async () => {
+    let rejectRequest: ((error: Error) => void) | null = null;
+    mocks.createThreadMutateAsync.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRequest = reject;
+        }),
+    );
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createMemoryRouter(
+      [{ path: "/", element: <RootComposeView /> }],
+      { initialEntries: ["/"] },
+    );
+    render(
+      <Provider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </Provider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("new-thread-prompt-box")).toBeTruthy());
+    const draft = getPromptDraftAccessor({ kind: "new-thread" });
+    act(() => {
+      draft.setDraft({ text: "original text", mentions: [], attachments: [] });
+      setPluginDraftMetadata(draft.storageKey, "alpha", { old: true });
+    });
+    fireEvent.click(screen.getByText("submit-root"));
+    await waitFor(() =>
+      expect(mocks.createThreadMutateAsync).toHaveBeenCalledTimes(1),
+    );
+    fireEvent.click(screen.getByText("set-root-text"));
+    await act(async () => rejectRequest?.(new Error("create failed")));
+
+    await waitFor(() => expect(draft.getCurrent().text).toBe("newer text"));
+    expect(getAllPluginDraftMetadata(draft.storageKey)).toEqual({});
   });
 
   it("ignores a repeated submit while the first submission is pending", async () => {

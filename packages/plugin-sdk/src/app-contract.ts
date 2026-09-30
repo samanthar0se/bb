@@ -2349,9 +2349,13 @@ export interface ComposerPlusMenuItem {
 export interface ComposerView {
   scope: PluginComposerScope;
   layout: "expanded" | "compact" | "zen";
-  /** Effective provider selected in this composer, or null while unresolved. */
+  /**
+   * Effective provider selected in this composer, or null when the composer
+   * does not supply a selection or the selection is unresolved.
+   */
   experimental_selectedProviderId: string | null;
   draft: { text: string; isEmpty: boolean; attachmentCount: number };
+  /** Read-only snapshot of this plugin's new-thread draft metadata, or null when unsupported. */
   readonly experimental_pluginMetadata?: Readonly<Record<string, JsonValue>> | null;
   run: { isRunning: boolean; isSubmitting: boolean };
 }
@@ -2424,6 +2428,7 @@ export interface PluginComposerApi {
   scope: PluginComposerScope;
   /** Current plain text for this composer scope. */
   readonly text: string;
+  /** Snapshot of this plugin's persistent new-thread draft metadata, or null when unsupported. */
   readonly experimental_pluginMetadata: Readonly<Record<string, JsonValue>> | null;
   /**
    * Replace the draft's plain text. Attachments are preserved. Inline mentions
@@ -2462,6 +2467,7 @@ export interface PluginComposerApi {
    * content should be fetched fresh when the message is sent.
    */
   insertMention(mention: PluginComposerMention): void;
+  /** Replace this plugin's new-thread draft metadata; an empty object clears it. */
   experimental_setPluginMetadata?(metadata: JsonObject): void;
   /** Remove this plugin's matching mention pills and their text from the current draft. */
   experimental_removeMention(mention: { provider: string; id: string }): void;

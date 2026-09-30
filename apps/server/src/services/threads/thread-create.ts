@@ -550,6 +550,16 @@ export async function createThreadFromRequest(
   }
   if (
     rawRequestInput.experimental_pluginMetadataByPlugin !== undefined &&
+    rawRequestInput.origin === "plugin"
+  ) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      'experimental_pluginMetadataByPlugin cannot be used with origin "plugin"',
+    );
+  }
+  if (
+    rawRequestInput.experimental_pluginMetadataByPlugin !== undefined &&
     rawRequestInput.originKind !== null
   ) {
     throw new ApiError(

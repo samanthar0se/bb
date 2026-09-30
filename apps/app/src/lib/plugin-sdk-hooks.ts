@@ -664,8 +664,8 @@ export function useComposerInputLock(storageKey: string | null): boolean {
 
 export function useComposerView(): ComposerView {
   const providedView = useContext(PluginComposerViewContext);
-  if (providedView !== undefined) return providedView;
-  return useFallbackComposerView();
+  const fallback = useFallbackComposerView();
+  return providedView ?? fallback;
 }
 
 function useFallbackComposerView(): ComposerView {

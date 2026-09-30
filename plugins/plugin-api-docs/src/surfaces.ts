@@ -445,16 +445,19 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
         bullets: [
           "Read the draft prompt's text, whether it is empty, and how many files are attached",
           "Read the prompt box's layout and whether the thread is already running a turn",
-          "Read the effective provider selected in that composer, or null while selection is unresolved",
+          "Read the effective provider selected in that composer; it updates when the selection changes and is null while unresolved or when the composer surface does not supply a selection",
           "Lock the input and release it again, so the draft prompt cannot change mid-operation",
-          "Read experimental per-plugin metadata on a composer draft and set the calling plugin's metadata for the new-thread draft",
+          "Read the calling plugin's saved metadata for the new-thread draft and set or clear only that plugin's metadata; unsupported composers return null and omit the setter",
           "Release locks and text effects automatically when the slot unmounts or its composer scope changes; persistent [thread row status](thread-row-status) requires an app-wide script",
         ],
         apiSymbols: [
           "useComposer",
           "useComposerView",
           "ComposerView",
+          "ComposerView.experimental_pluginMetadata",
           "PluginComposerApi",
+          "PluginComposerApi.experimental_pluginMetadata",
+          "PluginComposerApi.experimental_setPluginMetadata",
         ],
       },
       {

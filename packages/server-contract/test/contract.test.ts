@@ -352,7 +352,7 @@ const OPTIONAL_SERVER_FIELD_GROUPS: readonly OptionalServerFieldGroup[] = [
   },
   {
     reason:
-      'pluginMetadata is accepted only when origin is "plugin"; the experimental per-plugin metadata map is accepted only on app-origin, non-fork creation; plugin submission data is present only for experimental composer submissions and queued payloads that preserve them. Omission seeds no plugin namespace.',
+      'pluginMetadata is accepted only when origin is "plugin"; the experimental per-plugin metadata map is accepted on app, CLI, and SDK creation, rejected with plugin origin and forks; plugin submission data is present only for experimental composer submissions and queued payloads that preserve them. Omission seeds no plugin namespace.',
     fields: [
       "createThreadRequestSchema.pluginMetadata",
       "forkThreadRequestSchema.pluginMetadata",

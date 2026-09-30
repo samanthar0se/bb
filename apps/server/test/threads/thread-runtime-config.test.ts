@@ -98,8 +98,7 @@ function seedPluginMetadataThread(
     environmentId: environment.id,
     providerId: "codex",
     status: args.status,
-    originPluginId: "provider-codex",
-    pluginMetadata: { pluginId: "provider-codex", metadata: args.value },
+    pluginMetadataByPlugin: { "provider-codex": args.value },
   });
   return { environment, hostId, project, thread };
 }

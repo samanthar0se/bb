@@ -77,6 +77,12 @@ import {
   useCreateThread,
 } from "@/hooks/mutations/thread-runtime-mutations";
 import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
+import {
+  clearPluginDraftMetadataIfCurrentMatches,
+  getAllPluginDraftMetadata,
+  restorePluginDraftMetadataIfEmpty,
+  subscribePluginDraftMetadata,
+} from "@/hooks/usePluginDraftMetadataStorage";
 import type { NewThreadRequest } from "@get-bb/plugin-sdk";
 import {
   useCloseTerminal,
@@ -644,17 +650,58 @@ export function RootComposeView() {
       if (!arePromptDraftStatesEqual(newThreadDraft.getCurrent(), draft)) {
         return;
       }
+      const submittedMetadata = getAllPluginDraftMetadata(
+        newThreadDraft.storageKey,
+      );
+      const clearedSubmittedMetadata =
+        clearPluginDraftMetadataIfCurrentMatches(
+          newThreadDraft.storageKey,
+          submittedMetadata,
+        );
+      if (!clearedSubmittedMetadata) return;
       newThreadDraft.setDraft(emptyPromptDraftState());
+      let draftChangedAfterHandoff = false;
+      const unsubscribeDraft = newThreadDraft.subscribe(() => {
+        draftChangedAfterHandoff = true;
+      });
+      const unsubscribeMetadata = subscribePluginDraftMetadata(
+        newThreadDraft.storageKey,
+        () => {
+          draftChangedAfterHandoff = true;
+        },
+      );
+      const stopWatchingDraft = () => {
+        unsubscribeDraft();
+        unsubscribeMetadata();
+      };
       createDraftThread
         .mutateAsync({
           ...request,
+          ...(Object.keys(submittedMetadata).length > 0
+            ? { experimental_pluginMetadataByPlugin: submittedMetadata }
+            : {}),
           ...(rootComposeSectionId ? { sectionId: rootComposeSectionId } : {}),
         })
         .catch(() => {
-          if (isPromptDraftEmpty(newThreadDraft.getCurrent())) {
-            newThreadDraft.setDraft(draft);
+          if (
+            draftChangedAfterHandoff ||
+            !isPromptDraftEmpty(newThreadDraft.getCurrent()) ||
+            Object.keys(getAllPluginDraftMetadata(newThreadDraft.storageKey))
+              .length > 0
+          ) {
+            return;
           }
-        });
+          if (
+            Object.keys(submittedMetadata).length > 0 &&
+            !restorePluginDraftMetadataIfEmpty(
+              newThreadDraft.storageKey,
+              submittedMetadata,
+            )
+          )
+            return;
+          newThreadDraft.setDraft(draft);
+        })
+        .finally(stopWatchingDraft);
     },
     [createDraftThread, forkSeed, rootComposeSectionId],
   );

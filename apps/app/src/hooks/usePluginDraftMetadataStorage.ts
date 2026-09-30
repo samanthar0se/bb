@@ -7,7 +7,7 @@ type Listener = () => void;
 type MetadataMap = Record<string, JsonObject>;
 const cache = new Map<string, MetadataMap>();
 const listeners = new Map<string, Set<Listener>>();
-const EMPTY_METADATA = Object.freeze({}) as JsonObject;
+export const EMPTY_PLUGIN_DRAFT_METADATA = Object.freeze({}) as JsonObject;
 
 function storageKeyForDraft(draftStorageKey: string): string {
   return `${STORAGE_PREFIX}${draftStorageKey}`;
@@ -75,7 +75,7 @@ export function getPluginDraftMetadata(
   draftStorageKey: string,
   pluginId: string,
 ): JsonObject {
-  return read(draftStorageKey)[pluginId] ?? EMPTY_METADATA;
+  return read(draftStorageKey)[pluginId] ?? EMPTY_PLUGIN_DRAFT_METADATA;
 }
 export function setPluginDraftMetadata(
   draftStorageKey: string,

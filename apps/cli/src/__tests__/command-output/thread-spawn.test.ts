@@ -564,7 +564,7 @@ describe("bb thread spawn command output", () => {
     expect(normalizedHelp).toMatch(/Permission mode: accept-edits, auto, or full/);
   });
 
-  it("captures CLI and app-origin spawn requests without sending a forged origin", async () => {
+  it("keeps CLI attribution with and without per-plugin metadata", async () => {
     const thread = fixtures.makeThread({
       id: "thread-origin",
       projectId: "proj-1",
@@ -604,7 +604,7 @@ describe("bb thread spawn command output", () => {
     );
     expect(post).toHaveBeenNthCalledWith(2, {
       json: expect.objectContaining({
-        origin: "app",
+        origin: "cli",
         experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
       }),
     });

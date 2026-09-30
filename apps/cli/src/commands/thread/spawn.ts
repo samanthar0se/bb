@@ -400,7 +400,7 @@ export function registerSpawnCommand(
     .option("--send-at <when>", SEND_AT_HELP)
     .option(
       "--plugin-metadata-by-plugin <json>",
-      "App-origin plugin metadata map as JSON",
+      "Per-plugin JSON metadata map for the new thread",
     )
     .option(
       "--draft",
@@ -621,7 +621,7 @@ export function registerSpawnCommand(
             sdk,
           });
           thread = await sdk.threads.spawn({
-            origin: pluginMetadataByPlugin === null ? "cli" : "app",
+            origin: "cli",
             projectId,
             ...(providerId ? { providerId } : {}),
             ...(opts.model ? { model: opts.model } : {}),
