@@ -49,9 +49,9 @@ Spawning:
     --permission-mode <mode>       Permission mode: accept-edits, auto, or full
     --plan                         Send the prompt as the provider's /plan action (plan first, execute after approval)
     --section <id>                 Create the thread in a section
+    --pinned                       Create the thread in Pinned
     --visibility <visibility>      visible or hidden; a child inherits its parent by default
     --send-at <when>               Dispatch the first message at an ISO 8601 timestamp or a duration from now (30s, 10m, 2h, 7d)
-    --draft                        Save the prompt as the thread's draft instead of sending it
     --file <path>                  CLI-local absolute path, file: URL, or uploaded file path
     --image <path>                 CLI-local absolute path, file: URL, or uploaded image path
     --origin-kind <kind>           Create a fork thread
@@ -240,9 +240,8 @@ Opening threads and files in the app:
   bb thread pane <action> [thread-id]      Maximize, restore, toggle, spotlight, or clear spotlight
 
   Inside a BB thread, BB_THREAD_ID selects the current thread automatically and
-  the thread ID argument is omitted for file-only opens. Pass an explicit thread
-  ID with --split to open another thread. Outside a BB thread, pass the thread ID
-  as the first argument. A thread already open in a pane is focused instead of
+  the thread ID argument is omitted for file-only opens. Outside a BB thread,
+  pass the thread ID as the first argument. A thread already open in a pane is focused instead of
   duplicated. Edge placement creates panes through the eighth pane; at eight
   panes, it replaces the focused pane.
   Pane actions broadcast to connected BB app windows and affect the matching
@@ -389,20 +388,6 @@ Queued messages:
   passed is rejected, as is a bare date, which has no time of day. Several
   queued rows on one thread are normal: two scheduled sends coexist.
 
-Drafts:
-
-  bb thread draft show <thread-id>
-  bb thread draft set <thread-id> <message> [--file <path>] [--image <path>]
-  bb thread draft clear <thread-id>
-
-  A draft is a thread's saved, unsent message. `bb thread spawn --draft`
-  creates a draft thread: it stays `pending`, nothing is provisioned, and the
-  prompt is its draft. The app saves a draft thread when you leave the
-  new-thread composer with text in it, and shows the draft in that thread's
-  composer. Send a message with `bb thread tell` to start the thread. Sending
-  does not clear the draft; `draft clear` does, and the app clears it when the
-  composer sends.
-
 Persisted panel tabs:
 
   bb thread tabs show <thread-id>
@@ -486,3 +471,5 @@ Lifecycle ownership:
   recursively deletes them after runtime/storage cleanup. Failed cleanup retries
   durably. Unarchive the owner before explicitly restoring a dependent. Stop does
   not cascade. Sidebar parents and ordinary forks retain their existing policies.
+
+`bb thread spawn --plugin-metadata-by-plugin '{"linear":{"issue":"BB-42"}}'` seeds per-plugin JSON objects while keeping CLI attribution. The aggregate is limited to 256 KiB, and fork options reject the map. SDK callers use `threads.create({ experimental_pluginMetadataByPlugin: ... })`; plugin callers use their existing single-plugin `pluginMetadata` seed.

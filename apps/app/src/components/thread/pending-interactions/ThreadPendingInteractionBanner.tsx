@@ -180,7 +180,8 @@ function useApprovalDecisionSubmission({
   interaction,
   threadId,
 }: UseApprovalDecisionSubmissionArgs): ApprovalDecisionSubmission {
-  const resolvePendingInteraction = useResolveThreadPendingInteraction();
+  const resolvePendingInteraction =
+    useResolveThreadPendingInteraction(threadId);
   const isResolving = interaction.status === "resolving";
   const errorMessage = resolvePendingInteraction.error
     ? getMutationErrorMessage({

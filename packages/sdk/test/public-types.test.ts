@@ -242,6 +242,7 @@ type ExpectedBbSdkKey =
 type ExpectedRealtimeKey = "subscribe";
 
 type ExpectedEnvironmentsKey =
+  | "experimental_cleanup"
   | "archiveThreads"
   | "commit"
   | "delete"
@@ -352,6 +353,8 @@ type ExpectedStatusKey = "get";
 
 type ExpectedSystemKey =
   | "acknowledgeAppUpdate"
+  | "mobileAppDownloads"
+  | "mobileAppReleases"
   | "appUpdate"
   | "applyAppUpdate"
   | "setMachineEnvironmentVariable"
@@ -430,7 +433,6 @@ type ExpectedThreadsKey =
   | "unarchive"
   | "unpin"
   | "update"
-  | "updateDraft"
   | "wait";
 
 type ExpectedThreadEventsKey = "list" | "wait";

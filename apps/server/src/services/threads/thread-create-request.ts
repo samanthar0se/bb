@@ -23,12 +23,11 @@ export interface ThreadCreateServiceRequestInput {
    */
   sendAt?: CreateThreadRequest["sendAt"];
   input: PromptInput[];
-  /** `true` ⇒ `input` is saved as the thread's draft instead of dispatched. */
-  draft?: CreateThreadRequest["draft"];
   pluginMetadata?: CreateThreadRequest["pluginMetadata"];
   experimental_pluginMetadataByPlugin?: CreateThreadRequest["experimental_pluginMetadataByPlugin"];
   pluginSubmission?: CreateThreadRequest["pluginSubmission"];
   sectionId?: CreateThreadRequest["sectionId"];
+  pinned?: CreateThreadRequest["pinned"];
   model?: CreateThreadRequest["model"];
   origin: ThreadCreateOrigin | null;
   originPluginId?: CreateThreadRequest["originPluginId"];
@@ -49,7 +48,10 @@ export interface ThreadCreateServiceRequestInput {
 
 export interface ThreadCreateServiceRequest extends Omit<
   ThreadCreateServiceRequestInput,
-  "environment" | "pluginMetadata" | "experimental_pluginMetadataByPlugin" | "providerId"
+  | "environment"
+  | "pluginMetadata"
+  | "experimental_pluginMetadataByPlugin"
+  | "providerId"
 > {
   environment: EnvironmentArgs | ProviderEnvironmentArgs;
   pluginMetadata: { pluginId: string; metadata: JsonObject } | null;

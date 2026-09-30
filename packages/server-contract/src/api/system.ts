@@ -539,3 +539,16 @@ export const systemMachineProvidersResponseSchema = z.object({
 export type SystemMachineProvidersResponse = z.infer<
   typeof systemMachineProvidersResponseSchema
 >;
+
+export const androidAppArtifactSchema = z.object({
+  version: z.string().min(1),
+  versionCode: z.number().int().positive(),
+  size: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type AndroidAppArtifact = z.infer<typeof androidAppArtifactSchema>;
+
+export interface SystemMobileAppReleasesResponse {
+  android: (AndroidAppArtifact & { updatedAt: string }) | null;
+}
+

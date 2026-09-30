@@ -516,7 +516,7 @@ describe("bb thread spawn command output", () => {
     );
   });
 
-  it("bb thread spawn allows sections for hidden workers", async () => {
+  it("bb thread spawn combines sections and pinning for hidden workers", async () => {
     const thread: domain.Thread = fixtures.makeThread({
       sectionId: "sec_work",
       id: "thread-hidden-section",
@@ -537,6 +537,7 @@ describe("bb thread spawn command output", () => {
         "background work",
         "--visibility",
         "hidden",
+        "--pinned",
         "--section",
         "sec_work",
       ],
@@ -546,6 +547,7 @@ describe("bb thread spawn command output", () => {
     expect(post).toHaveBeenCalledWith({
       json: expect.objectContaining({
         sectionId: "sec_work",
+        pinned: true,
         visibility: "hidden",
       }),
     });
@@ -561,7 +563,9 @@ describe("bb thread spawn command output", () => {
     expect(normalizedHelp).toContain("origin/<branch>");
     expect(normalizedHelp).toContain("bb environment providers");
     expect(normalizedHelp).not.toContain("bb curl");
-    expect(normalizedHelp).toMatch(/Permission mode: accept-edits, auto, or full/);
+    expect(normalizedHelp).toMatch(
+      /Permission mode: accept-edits, auto, or full/,
+    );
   });
 
   it("keeps CLI attribution with and without per-plugin metadata", async () => {
@@ -615,24 +619,39 @@ describe("bb thread spawn command output", () => {
   it.each([
     ["--origin-kind", "fork"],
     ["--source-thread", "source-1"],
-  ])("rejects plugin metadata with %s before making a request", async (flag, value) => {
-    const post = vi.fn();
-    const stderrWrite = vi.spyOn(console, "error").mockImplementation(() => {});
-    stubServerApi({ "v1.threads.$post": post });
-    await expect(
-      runCommand(
-        [
-          "thread", "spawn", "--project", "proj-1", "--prompt", "hello",
-          "--plugin-metadata-by-plugin", '{"linear":{"a":1}}', flag, value,
-        ],
-        register,
-      ),
-    ).rejects.toThrow("process.exit:1");
-    expect(stderrWrite).toHaveBeenCalledWith(
-      expect.stringContaining("cannot be combined with --origin-kind or --source-thread"),
-    );
-    expect(post).not.toHaveBeenCalled();
-  });
+  ])(
+    "rejects plugin metadata with %s before making a request",
+    async (flag, value) => {
+      const post = vi.fn();
+      const stderrWrite = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      stubServerApi({ "v1.threads.$post": post });
+      await expect(
+        runCommand(
+          [
+            "thread",
+            "spawn",
+            "--project",
+            "proj-1",
+            "--prompt",
+            "hello",
+            "--plugin-metadata-by-plugin",
+            '{"linear":{"a":1}}',
+            flag,
+            value,
+          ],
+          register,
+        ),
+      ).rejects.toThrow("process.exit:1");
+      expect(stderrWrite).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "cannot be combined with --origin-kind or --source-thread",
+        ),
+      );
+      expect(post).not.toHaveBeenCalled();
+    },
+  );
 
   it("bb thread spawn reports invalid permission mode choices", async () => {
     vi.stubEnv("BB_PROJECT_ID", "proj-1");

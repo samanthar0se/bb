@@ -311,7 +311,6 @@ const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
         onSubmit={onSubmit}
         textEffects={textEffects}
         onComposerLayoutChange={onComposerLayoutChange}
-        experimental_selectedProviderId={execution.provider.selectedId ?? null}
         history={history}
         typeahead={typeahead}
         mentionMenuPlacement={mentionMenuPlacement}

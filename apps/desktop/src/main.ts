@@ -3081,7 +3081,7 @@ async function runDesktopApp(): Promise<void> {
     resolveAppCommand(input, hostWebContentsId) {
       return resolveDesktopBrowserAppCommand({
         input,
-        isMac: process.platform === "darwin",
+        platform: process.platform,
         keybindings: currentAppKeybindings,
         splitNavigationEnabled:
           splitNavigationEnabledWebContentsIds.has(hostWebContentsId),

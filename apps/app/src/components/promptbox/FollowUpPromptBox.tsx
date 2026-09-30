@@ -718,7 +718,6 @@ function FollowUpPromptBoxWithComposer({
         blurOnPointerSubmit={isCompactViewport && isPointerCoarse}
         textEffects={textEffects}
         onComposerLayoutChange={setComposerLayout}
-        experimental_selectedProviderId={execution.provider.selectedId ?? null}
         scrollToBottomOnSubmit={submitMode.kind !== "queue"}
         history={composer.history}
         focusEndKey={focusEndKey}
@@ -735,6 +734,15 @@ function FollowUpPromptBoxWithComposer({
             !canSubmit ||
             composer.isFollowUpSubmitting ||
             (steerOnPrimarySubmit && !composer.canModifierSubmit),
+          disabledReason: composer.isFollowUpSubmitting
+            ? "Submitting..."
+            : isLoadingExecutionOptions
+              ? "Loading models..."
+              : isLoadingPendingInteractions
+                ? "Checking pending interactions..."
+                : isUnavailable
+                  ? "Unavailable"
+                  : undefined,
           onModifierSubmit,
           swapSubmitActions: steerOnPrimarySubmit,
           showModifierSubmitAction: submitMode.kind === "queue",
@@ -819,7 +827,9 @@ function FollowUpPromptBoxWithComposer({
         <DefaultFollowUpComposer
           active={composer.threadRuntimeDisplayStatus === "active"}
           composerElement={composerElement}
-          hasPluginComposerScope={composerScope !== null}
+          hasPluginComposerScope={
+            composerScope !== null && !suppressPluginComposerCustomizations
+          }
           isPrimaryComposer={isPrimaryComposer}
           pendingInteraction={pendingInteraction}
           showScrollToBottomButton={showScrollToBottomButton}

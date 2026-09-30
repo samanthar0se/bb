@@ -191,7 +191,9 @@ vi.mock("@/components/promptbox/PromptBoxInternal", () => ({
         title={submission?.title}
         data-show-modifier-action={submission?.showModifierSubmitAction}
         onClick={
-          submission?.swapSubmitActions ? onSubmit : submission?.onModifierSubmit
+          submission?.swapSubmitActions
+            ? onSubmit
+            : submission?.onModifierSubmit
         }
       >
         Modifier submit

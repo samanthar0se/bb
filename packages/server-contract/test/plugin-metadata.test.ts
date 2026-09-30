@@ -65,7 +65,10 @@ describe("plugin metadata contracts", () => {
           originPluginId: undefined,
           experimental_pluginMetadataByPlugin: metadata,
         }),
-      ).toMatchObject({ origin, experimental_pluginMetadataByPlugin: metadata });
+      ).toMatchObject({
+        origin,
+        experimental_pluginMetadataByPlugin: metadata,
+      });
     },
   );
 
@@ -98,24 +101,27 @@ describe("plugin metadata contracts", () => {
   it.each([
     { originKind: "fork" as const },
     { sourceThreadId: "source-thread" },
-  ])("rejects per-plugin metadata when creating from a source: %o", (source) => {
-    expect(
-      issuesOf(
-        createThreadRequestSchema.safeParse({
-          ...createBase,
-          origin: "cli",
-          originPluginId: undefined,
-          experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
-          ...source,
-        }),
-      ),
-    ).toContainEqual({
-      message: source.originKind
-        ? "experimental_pluginMetadataByPlugin cannot be used with originKind"
-        : "experimental_pluginMetadataByPlugin cannot be used with sourceThreadId",
-      path: ["experimental_pluginMetadataByPlugin"],
-    });
-  });
+  ])(
+    "rejects per-plugin metadata when creating from a source: %o",
+    (source) => {
+      expect(
+        issuesOf(
+          createThreadRequestSchema.safeParse({
+            ...createBase,
+            origin: "cli",
+            originPluginId: undefined,
+            experimental_pluginMetadataByPlugin: { linear: { issue: "BB-42" } },
+            ...source,
+          }),
+        ),
+      ).toContainEqual({
+        message: source.originKind
+          ? "experimental_pluginMetadataByPlugin cannot be used with originKind"
+          : "experimental_pluginMetadataByPlugin cannot be used with sourceThreadId",
+        path: ["experimental_pluginMetadataByPlugin"],
+      });
+    },
+  );
 
   it("rejects pluginMetadata unless origin is plugin", () => {
     expect(

@@ -2,11 +2,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getThreadPluginMetadata } from "@bb/db";
-import { encodeClientTurnRequestIdNumber, type JsonObject } from "@bb/domain";
+import { getLatestThreadSequence, getThreadPluginMetadata } from "@bb/db";
+import type { JsonObject } from "@bb/domain";
 import {
   buildExecutionOptions,
-  buildThreadStartCommand,
   prepareTurnSubmitCommandPayload,
 } from "../../src/services/threads/thread-commands.js";
 import { createThreadFromRequest } from "../../src/services/threads/thread-create.js";
@@ -136,82 +135,84 @@ async function withIssueLauncher(
 }
 
 describe("thread plugin metadata in agent configuration", () => {
-  it("configures the first thread.start from the creation seed without serializing it", async () => {
-    await withIssueLauncher(async ({ server, readObservations }) => {
-      const { host } = seedHostSession(server.deps, {
-        id: "host-plugin-metadata-configure",
-      });
-      const { project } = seedProjectWithSource(server.deps, {
-        hostId: host.id,
-      });
-      const environment = seedEnvironment(server.deps, {
-        hostId: host.id,
-        projectId: project.id,
-        path: join(server.config.dataDir, "plugin-metadata-workspace"),
-      });
-      const seed = launchSeed("BB-42");
-      const thread = await createThreadFromRequest(server.deps, {
-        environment: { type: "reuse", environmentId: environment.id },
-        input: textInput("unsent draft"),
-        draft: true,
-        origin: "app",
-        originKind: null,
-        startedOnBehalfOf: null,
-        projectId: project.id,
-        providerId: "codex",
-        experimental_pluginMetadataByPlugin: {
-          "issue-launcher": seed,
-        },
-      });
-      expect(
-        getThreadPluginMetadata(server.db, thread.id, "issue-launcher"),
-      ).toEqual({ metadata: seed, corrupt: false });
-      const execution = await buildExecutionOptions(
-        server.deps,
-        { model: "gpt-5" },
-        { threadId: thread.id },
-      );
+  it.each(["app", "cli", "sdk"] as const)(
+    "configures the first thread.start from the %s creation seed without serializing it",
+    async (origin) => {
+      await withIssueLauncher(async ({ server, readObservations }) => {
+        const { host } = seedHostSession(server.deps, {
+          id: "host-plugin-metadata-configure",
+        });
+        const { project } = seedProjectWithSource(server.deps, {
+          hostId: host.id,
+        });
+        const environment = seedEnvironment(server.deps, {
+          hostId: host.id,
+          projectId: project.id,
+          path: join(server.config.dataDir, "plugin-metadata-workspace"),
+        });
+        const seed = launchSeed("BB-42");
+        const thread = await createThreadFromRequest(server.deps, {
+          environment: { type: "reuse", environmentId: environment.id },
+          input: textInput("hello"),
+          origin,
+          startedOnBehalfOf: null,
+          projectId: project.id,
+          providerId: "codex",
+          experimental_pluginMetadataByPlugin: {
+            "issue-launcher": seed,
+          },
+        });
+        expect(
+          getThreadPluginMetadata(server.db, thread.id, "issue-launcher"),
+        ).toEqual({ metadata: seed, corrupt: false });
+        const execution = await buildExecutionOptions(
+          server.deps,
+          { model: "gpt-5" },
+          { threadId: thread.id },
+        );
 
-      const startCommand = await buildThreadStartCommand(server.deps, {
-        environment,
-        execution,
-        fork: null,
-        permissionEscalation: "ask",
-        input: textInput("hello"),
-        projectId: project.id,
-        providerId: "codex",
-        requestId: encodeClientTurnRequestIdNumber({ value: 1 }),
-        syncGeneratedTitle: false,
-        thread,
-      });
+        const queuedStart = await waitForQueuedCommand(
+          server,
+          ({ command }) =>
+            command.type === "thread.start" && command.threadId === thread.id,
+        );
+        if (queuedStart.command.type !== "thread.start")
+          throw new Error("Expected a thread.start command");
+        const startCommand = queuedStart.command;
 
-      expect(await readObservations()).toEqual([
-        { threadId: thread.id, pluginMetadata: seed, frozen: true },
-      ]);
-      expect(startCommand.dynamicTools.map((tool) => tool.name)).toContain(
-        "issue_lookup",
-      );
-      expectPrivateCommand(startCommand, "BB-42");
+        expect(await readObservations()).toEqual([
+          { threadId: thread.id, pluginMetadata: seed, frozen: true },
+        ]);
+        expect(startCommand.dynamicTools.map((tool) => tool.name)).toContain(
+          "issue_lookup",
+        );
+        expectPrivateCommand(startCommand, "BB-42");
 
-      seedThreadRuntimeState(server.deps, {
-        environmentId: environment.id,
-        providerThreadId: "provider-plugin-metadata-configure",
-        threadId: thread.id,
+        seedThreadRuntimeState(server.deps, {
+          environmentId: environment.id,
+          providerThreadId: "provider-plugin-metadata-configure",
+          sequenceStart:
+            getLatestThreadSequence(server.db, { threadId: thread.id }) + 1,
+          threadId: thread.id,
+        });
+        const submitCommand = await prepareTurnSubmitCommandPayload(
+          server.deps,
+          {
+            environment,
+            execution,
+            permissionEscalation: "ask",
+            input: textInput("continue"),
+            target: { mode: "start" },
+            thread,
+          },
+        );
+        expect(
+          submitCommand.resumeContext.dynamicTools.map((tool) => tool.name),
+        ).toContain("issue_lookup");
+        expectPrivateCommand(submitCommand, "BB-42");
       });
-      const submitCommand = await prepareTurnSubmitCommandPayload(server.deps, {
-        environment,
-        execution,
-        permissionEscalation: "ask",
-        input: textInput("continue"),
-        target: { mode: "start" },
-        thread,
-      });
-      expect(
-        submitCommand.resumeContext.dynamicTools.map((tool) => tool.name),
-      ).toContain("issue_lookup");
-      expectPrivateCommand(submitCommand, "BB-42");
-    });
-  });
+    },
+  );
 
   it("seeds threads spawned and forked through the plugin SDK before their first queued thread.start", async () => {
     await withIssueLauncher(async ({ server, readObservations }) => {

@@ -204,15 +204,16 @@ function toRuntimeExecutionOptions(
     providerId: args.providerId,
   });
   const registration = args.deps.providerRegistry.get(args.providerId);
-  const pluginMetadata = registration === null
-    ? {}
-    : deepFreezePluginMetadata(
-        getThreadPluginMetadata(
-          args.deps.db,
-          args.threadId,
-          registration.pluginId,
-        ).metadata,
-      );
+  const pluginMetadata =
+    registration === null
+      ? {}
+      : deepFreezePluginMetadata(
+          getThreadPluginMetadata(
+            args.deps.db,
+            args.threadId,
+            registration.pluginId,
+          ).metadata,
+        );
   const providerOptions =
     registration?.deriveProviderOptions({
       threadId: args.threadId,

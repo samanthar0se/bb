@@ -1,3 +1,12 @@
+import { appendQuoteAndAttachmentsToDraft } from "@bb/client-core";
+import type { ComposerAttachment } from "@get-bb/plugin-sdk";
+import { createCoreComposerActions } from "@/lib/plugin-composer-handle";
+
+import {
+  readThreadCreationPlacement,
+  DEFAULT_THREAD_CREATION_PLACEMENT,
+} from "@/lib/thread-creation-placement";
+import { useRootComposePlacement } from "@/lib/root-compose-selection";
 import { useInitialPromptDraft } from "@/components/promptbox/mentions/initial-prompt-draft";
 import {
   ThreadTitle,
@@ -68,22 +77,11 @@ import { Button } from "@bb/shared-ui/button";
 import { useIsCompactViewport } from "@bb/shared-ui/hooks/use-compact-viewport";
 import { usePointerCoarse } from "@bb/shared-ui/hooks/use-pointer-coarse";
 import { COARSE_POINTER_COMPACT_ICON_SIZE_CLASS } from "@bb/shared-ui/coarse-pointer-sizing";
-import { PluginIcon } from "@/components/plugin/PluginIcon";
+import { PluginItemIcon } from "@/components/plugin/PluginIcon";
 import type { FileOpenerOverride } from "@/lib/plugin-slot-resolvers";
 import { usePluginNewThreadPanelActions } from "@/components/plugin/PluginPanelActions";
 import { usePluginSlots } from "@/lib/plugin-slots";
-import {
-  useCreateDraftThread,
-  useCreateThread,
-} from "@/hooks/mutations/thread-runtime-mutations";
-import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
-import {
-  clearPluginDraftMetadataIfCurrentMatches,
-  getAllPluginDraftMetadata,
-  restorePluginDraftMetadataIfEmpty,
-  subscribePluginDraftMetadata,
-} from "@/hooks/usePluginDraftMetadataStorage";
-import type { NewThreadRequest } from "@get-bb/plugin-sdk";
+import { useCreateThread } from "@/hooks/mutations/thread-runtime-mutations";
 import {
   useCloseTerminal,
   useCloseEnvironmentTerminal,
@@ -101,13 +99,6 @@ import {
 import { PluginComposerHostProvider } from "@/components/plugin/plugin-composer-host";
 import type { PromptMentionLinkResolver } from "@/components/promptbox/editor/prompt-mention-link";
 import { useQuickCreateProjectController } from "@/hooks/useQuickCreateProject";
-import {
-  arePromptDraftStatesEqual,
-  emptyPromptDraftState,
-  isPromptDraftEmpty,
-  type PromptDraftAttachment,
-  type PromptDraftState,
-} from "@bb/client-core";
 import {
   buildForkThreadRequest,
   FORK_THREAD_CREATE_SEED_LOCATION_STATE_KEY,
@@ -162,7 +153,6 @@ import {
 import {
   useRootComposeForkSeed,
   useRootComposeProjectId,
-  useRootComposeSectionId,
   useSetRootComposeProjectId,
 } from "@/lib/root-compose-selection";
 import {
@@ -187,7 +177,6 @@ import {
 } from "@/components/thread/terminal/useThreadTerminalController";
 import {
   buildTerminalSyncedSecondaryFileTabs,
-  getRetainedTerminalTabId,
   syncTerminalTabsInFixedPanelState,
 } from "@/components/secondary-panel/terminalPanelTabs";
 import {
@@ -203,7 +192,10 @@ import {
   useAppCommandHandler,
   useAppCommandShortcut,
 } from "@/components/commands/AppCommandProvider";
-import { useOptionalPaneContext } from "./thread-detail/PaneContext";
+import {
+  useOptionalPaneContext,
+  usePaneContext,
+} from "./thread-detail/PaneContext";
 import {
   PluginDetailPanelContext,
   usePluginDetailPanelState,
@@ -301,18 +293,6 @@ export function RootComposeRightPanelToggle({
   const rightPanelLabel = isOpen ? "Hide right panel" : "Show right panel";
   const rightPanelIconName = RIGHT_PANEL_TOGGLE_ICON_NAME;
 
-  useEffect(() => {
-    if (typeof window.requestIdleCallback === "function") {
-      const idleCallback = window.requestIdleCallback(
-        preloadThreadSecondaryPanel,
-        { timeout: 1000 },
-      );
-      return () => window.cancelIdleCallback(idleCallback);
-    }
-    const timeout = window.setTimeout(preloadThreadSecondaryPanel, 1000);
-    return () => window.clearTimeout(timeout);
-  }, []);
-
   return (
     <Button
       type="button"
@@ -324,6 +304,7 @@ export function RootComposeRightPanelToggle({
       }
       aria-keyshortcuts={shortcut?.ariaKeyshortcuts}
       aria-expanded={isOpen}
+      onPointerEnter={preloadThreadSecondaryPanel}
       onFocus={preloadThreadSecondaryPanel}
       onPointerDown={preloadThreadSecondaryPanel}
       onClick={onToggle}
@@ -447,6 +428,7 @@ function readForkThreadCreateSeedFromLocationState(
 
 export function hasSingleUseRootComposeTargetState(state: unknown): boolean {
   return (
+    readThreadCreationPlacement(state) !== null ||
     readRootComposeSectionTargetFromLocationState(state) !== null ||
     readRootComposeEnvironmentTargetFromLocationState(state) !== null ||
     readForkThreadCreateSeedFromLocationState(state) !== null
@@ -536,28 +518,34 @@ export function LegacyProjectComposeRedirect({
   const location = useLocation();
   const navigate = useNavigate();
   const setRootComposeProjectId = useSetRootComposeProjectId();
+  const [, setPlacement] = useRootComposePlacement();
 
   useEffect(() => {
     setRootComposeProjectId(projectId);
+    setPlacement(DEFAULT_THREAD_CREATION_PLACEMENT);
     navigate(getRootComposeRoutePath(), {
       replace: true,
       state: location.state,
     });
-  }, [location.state, navigate, projectId, setRootComposeProjectId]);
+  }, [
+    location.state,
+    navigate,
+    projectId,
+    setRootComposeProjectId,
+    setPlacement,
+  ]);
 
   return <RouteLoadingSkeleton isBoundedPane={false} />;
 }
 
 export function RootComposeView() {
+  const { navigateInPane } = usePaneContext();
   const [rootComposeProjectId, setRootComposeProjectId] =
     useRootComposeProjectId();
   const location = useLocation();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const createThread = useCreateThread();
-  const createDraftThread = useCreateDraftThread();
-  const [rootComposeSectionId, setRootComposeSectionId] =
-    useRootComposeSectionId();
+  const [placement, setPlacement] = useRootComposePlacement();
   const [lastCreatedThreadId, setLastCreatedThreadId] = useState<string | null>(
     null,
   );
@@ -593,12 +581,7 @@ export function RootComposeView() {
       }
       const createRequest =
         forkSeed === null
-          ? {
-              ...requestFields,
-              ...(rootComposeSectionId
-                ? { sectionId: rootComposeSectionId }
-                : {}),
-            }
+          ? requestFields
           : buildForkThreadRequest({
               ...forkSeed,
               input: request.input,
@@ -612,99 +595,30 @@ export function RootComposeView() {
               serviceTier: request.serviceTier,
             });
       if (createRequest === null) return;
-      const thread = await createThread.mutateAsync(
-        sendAt === undefined
-          ? createRequest
-          : {
-              ...createRequest,
-              ...(sendAt === undefined ? {} : { sendAt }),
-            },
-      );
+      const thread = await createThread.mutateAsync({
+        ...createRequest,
+        ...placement,
+        ...(sendAt === undefined ? {} : { sendAt }),
+      });
       setLastCreatedThreadId(thread.id);
       setForkSeed(null);
-      setRootComposeSectionId(null);
+      setPlacement(DEFAULT_THREAD_CREATION_PLACEMENT);
       if (shouldNavigateToCreatedThread) {
-        navigate(
-          getThreadRoutePath({
-            projectId: thread.projectId,
-            threadId: thread.id,
-          }),
-        );
+        navigateInPane({ projectId: thread.projectId, threadId: thread.id });
       }
     },
     [
       createThread,
       forkSeed,
       queryClient,
-      navigate,
+      navigateInPane,
       navigateToThreadAfterCreate,
-      rootComposeSectionId,
+      placement,
       setForkSeed,
-      setRootComposeSectionId,
+      setPlacement,
     ],
   );
-  const handleLeaveWithDraft = useCallback(
-    (request: NewThreadRequest, draft: PromptDraftState) => {
-      if (forkSeed !== null) return;
-      const newThreadDraft = getPromptDraftAccessor({ kind: "new-thread" });
-      if (!arePromptDraftStatesEqual(newThreadDraft.getCurrent(), draft)) {
-        return;
-      }
-      const submittedMetadata = getAllPluginDraftMetadata(
-        newThreadDraft.storageKey,
-      );
-      const clearedSubmittedMetadata =
-        clearPluginDraftMetadataIfCurrentMatches(
-          newThreadDraft.storageKey,
-          submittedMetadata,
-        );
-      if (!clearedSubmittedMetadata) return;
-      newThreadDraft.setDraft(emptyPromptDraftState());
-      let draftChangedAfterHandoff = false;
-      const unsubscribeDraft = newThreadDraft.subscribe(() => {
-        draftChangedAfterHandoff = true;
-      });
-      const unsubscribeMetadata = subscribePluginDraftMetadata(
-        newThreadDraft.storageKey,
-        () => {
-          draftChangedAfterHandoff = true;
-        },
-      );
-      const stopWatchingDraft = () => {
-        unsubscribeDraft();
-        unsubscribeMetadata();
-      };
-      createDraftThread
-        .mutateAsync({
-          ...request,
-          ...(Object.keys(submittedMetadata).length > 0
-            ? { experimental_pluginMetadataByPlugin: submittedMetadata }
-            : {}),
-          ...(rootComposeSectionId ? { sectionId: rootComposeSectionId } : {}),
-        })
-        .catch(() => {
-          if (
-            draftChangedAfterHandoff ||
-            !isPromptDraftEmpty(newThreadDraft.getCurrent()) ||
-            Object.keys(getAllPluginDraftMetadata(newThreadDraft.storageKey))
-              .length > 0
-          ) {
-            return;
-          }
-          if (
-            Object.keys(submittedMetadata).length > 0 &&
-            !restorePluginDraftMetadataIfEmpty(
-              newThreadDraft.storageKey,
-              submittedMetadata,
-            )
-          )
-            return;
-          newThreadDraft.setDraft(draft);
-        })
-        .finally(stopWatchingDraft);
-    },
-    [createDraftThread, forkSeed, rootComposeSectionId],
-  );
+
   const composerSeed = useMemo(
     () =>
       forkSeed === null
@@ -733,7 +647,6 @@ export function RootComposeView() {
       resetKey={forkSeed?.sourceThreadId ?? null}
       preferReadyProviderWhenUnset={forkSeed === null}
       onSubmit={handleSubmit}
-      onLeaveWithDraft={handleLeaveWithDraft}
     >
       {(composer) => (
         <RootComposeSurface
@@ -743,7 +656,6 @@ export function RootComposeView() {
           rootComposeProjectId={rootComposeProjectId}
           setForkSeed={setForkSeed}
           setRootComposeProjectId={setRootComposeProjectId}
-          setRootComposeSectionId={setRootComposeSectionId}
           setStartedComposing={setStartedComposing}
           startedComposing={startedComposing}
         />
@@ -759,7 +671,6 @@ interface RootComposeSurfaceProps {
   rootComposeProjectId: string;
   setForkSeed: (seed: ForkThreadCreateSeed | null) => void;
   setRootComposeProjectId: (projectId: string) => void;
-  setRootComposeSectionId: (sectionId: string | null) => void;
   setStartedComposing: (started: boolean) => void;
   startedComposing: boolean;
 }
@@ -771,7 +682,6 @@ function RootComposeSurface({
   rootComposeProjectId,
   setForkSeed,
   setRootComposeProjectId,
-  setRootComposeSectionId,
   setStartedComposing,
   startedComposing,
 }: RootComposeSurfaceProps) {
@@ -783,6 +693,7 @@ function RootComposeSurface({
   );
   const location = useLocation();
   const navigate = useNavigate();
+  const [, setPlacement] = useRootComposePlacement();
   const isPointerCoarse = usePointerCoarse();
   const quickCreateProject = useQuickCreateProjectController();
   const {
@@ -837,20 +748,25 @@ function RootComposeSurface({
       }),
     [focusPromptBox, promptDraft.storageKey, setStartedComposing],
   );
+  const composerActions = useMemo(
+    () => createCoreComposerActions(pluginComposerHost),
+    [pluginComposerHost],
+  );
   const handleRootPanelSelectionAddToChat = useCallback(
-    (text: string, attachments?: readonly PromptDraftAttachment[]) => {
-      promptDraft.addQuote(text, attachments);
-      setStartedComposing(true);
-      window.requestAnimationFrame(focusPromptBox);
+    (text: string, attachments?: readonly ComposerAttachment[]) => {
+      composerActions.replace((current) =>
+        appendQuoteAndAttachmentsToDraft(current, text, attachments ?? []),
+      );
+      composerActions.focus();
     },
-    [focusPromptBox, promptDraft, setStartedComposing],
+    [composerActions],
   );
 
   const searchInitialPrompt = readInitialPromptFromSearch(location.search);
   const stateInitialPrompt = readInitialPromptFromLocationState(location.state);
   const searchInitialDraft = useInitialPromptDraft(searchInitialPrompt);
   const stateInitialDraft = useInitialPromptDraft(stateInitialPrompt);
-  const setPromptDraft = promptDraft.setDraft;
+  const setPromptDraft = composerActions.restoreDraft;
   const restorePromptDraftIfEmpty = promptDraft.restoreIfEmpty;
 
   useEffect(() => {
@@ -888,10 +804,19 @@ function RootComposeSurface({
     if (shouldStartComposingFromLocationState(location.state)) {
       setStartedComposing(true);
     }
-    if (sectionTarget?.kind === "set") {
-      setRootComposeSectionId(sectionTarget.sectionId);
-    } else if (sectionTarget?.kind === "clear") {
-      setRootComposeSectionId(null);
+    const targetPlacement = readThreadCreationPlacement(location.state);
+    if (targetPlacement !== null) {
+      setPlacement(targetPlacement);
+    } else if (
+      sectionTarget !== null ||
+      environmentTarget !== null ||
+      nextForkSeed !== null
+    ) {
+      setPlacement({
+        sectionId:
+          sectionTarget?.kind === "set" ? sectionTarget.sectionId : null,
+        pinned: false,
+      });
     }
     if (environmentTarget?.kind === "reuse") {
       seedEnvironmentSelectionValue(
@@ -929,8 +854,8 @@ function RootComposeSurface({
     setPermissionMode,
     setProviderModelReasoning,
     setRootComposeProjectId,
-    setRootComposeSectionId,
     setServiceTier,
+    setPlacement,
     setStartedComposing,
     stateInitialPrompt,
     stateInitialDraft,
@@ -1034,14 +959,6 @@ function RootComposeSurface({
   const activeFixedSecondaryTab = getActiveFixedSecondaryTab({
     fixedPanelTabsState,
   });
-  const retainedTerminalId = useMemo(
-    () =>
-      getRetainedTerminalTabId({
-        activeTab: activeFixedSecondaryTab,
-        isPanelOpen: isPersistedSecondaryPanelOpen,
-      }),
-    [activeFixedSecondaryTab, isPersistedSecondaryPanelOpen],
-  );
   const activeFixedSecondaryTabId = activeFixedSecondaryTab?.id ?? null;
   const isCompactViewport = useIsCompactViewport();
   const secondaryPanelDrawerVisibility =
@@ -1200,7 +1117,6 @@ function RootComposeSurface({
     preserveWorkspaceTabsAcrossContexts: true,
     projectHostId: rootProjectHostId,
     projectId: isProjectless ? null : projectId,
-    retainedTerminalId,
     storageFileExists: checkRootThreadStorageFileExists,
     storageFiles: rootThreadStorageFiles,
     terminalSessions: loadedTerminalSessions,
@@ -1215,10 +1131,9 @@ function RootComposeSurface({
         ? orderedSecondaryFileTabs
         : buildTerminalSyncedSecondaryFileTabs({
             orderedTabs: orderedSecondaryFileTabs,
-            retainedTerminalId,
             terminalSessions: loadedTerminalSessions,
           }),
-    [loadedTerminalSessions, orderedSecondaryFileTabs, retainedTerminalId],
+    [loadedTerminalSessions, orderedSecondaryFileTabs],
   );
   useEffect(() => {
     if (!terminalsListLoaded) {
@@ -1226,17 +1141,11 @@ function RootComposeSurface({
     }
     updateFixedPanelTabsState((state) =>
       syncTerminalTabsInFixedPanelState({
-        retainedTerminalId,
         state,
         terminalSessions,
       }),
     );
-  }, [
-    retainedTerminalId,
-    terminalSessions,
-    terminalsListLoaded,
-    updateFixedPanelTabsState,
-  ]);
+  }, [terminalSessions, terminalsListLoaded, updateFixedPanelTabsState]);
   const canCreateRootTerminal = canCreateRootComposeTerminal({
     connectedHostIds,
     environmentHostId: rootPanelEnvironment?.hostId,
@@ -1869,7 +1778,7 @@ function RootComposeSurface({
               ...shared,
               label: tab.title,
               leadingVisual: (
-                <PluginIcon
+                <PluginItemIcon
                   pluginId={tab.pluginId}
                   icon={pluginAction?.icon ?? null}
                   className={COARSE_POINTER_COMPACT_ICON_SIZE_CLASS}
@@ -1934,15 +1843,17 @@ function RootComposeSurface({
     !startedComposing &&
     projects !== undefined &&
     projects.length === 0;
-  const setPromptTextAndMentions = promptDraft.setTextAndMentions;
   const handleStartComposing = useCallback(
     (prefill?: string) => {
       if (prefill) {
-        setPromptTextAndMentions(prefill, []);
+        composerActions.replace({
+          text: prefill,
+          mentions: [],
+        });
       }
       setStartedComposing(true);
     },
-    [setPromptTextAndMentions, setStartedComposing],
+    [composerActions, setStartedComposing],
   );
   useEffect(() => {
     if (!startedComposing) return;

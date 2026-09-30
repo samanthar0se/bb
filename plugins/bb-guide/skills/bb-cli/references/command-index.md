@@ -19,6 +19,7 @@ These local commands manage the machine's default launch target without a runnin
 
 - `bb settings`
 - `bb settings show`
+- `bb settings mobile-app`
 - `bb settings ai-services`
 - `bb settings ai-services show`
 - `bb settings ai-services set`
@@ -196,10 +197,6 @@ move and downloads the new server's bb-app package for its service.
 - `bb thread queue delete`
 - `bb thread queue reorder`
 - `bb thread queue group`
-- `bb thread draft`
-- `bb thread draft show`
-- `bb thread draft set`
-- `bb thread draft clear`
 - `bb thread tabs`
 - `bb thread tabs show`
 - `bb thread tabs set`
@@ -236,6 +233,7 @@ move and downloads the new server's bb-app package for its service.
 - `bb environment providers`
 - `bb environment list`
 - `bb environment delete`
+- `bb environment cleanup`
 - `bb environment show`
 - `bb environment get`
 - `bb environment status`

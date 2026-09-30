@@ -69,13 +69,13 @@ interface ThreadSpawnCommandOptions {
   file?: string[];
   image?: string[];
   section?: string;
+  pinned?: boolean;
   originKind?: string;
   sourceThread?: string;
   sourceSeqEnd?: string;
   visibility?: string;
   sendAt?: string;
   pluginMetadataByPlugin?: string;
-  draft?: boolean;
 }
 
 export function looksLikePath(value: string): boolean {
@@ -385,6 +385,7 @@ export function registerSpawnCommand(
       [],
     )
     .option("--section <id>", "Create the thread in a section")
+    .option("--pinned", "Create the thread in Pinned")
     .option(
       "--visibility <visibility>",
       "Thread visibility: visible or hidden (a child inherits its parent)",
@@ -401,10 +402,6 @@ export function registerSpawnCommand(
     .option(
       "--plugin-metadata-by-plugin <json>",
       "Per-plugin JSON metadata map for the new thread",
-    )
-    .option(
-      "--draft",
-      "Save the prompt as the thread's draft instead of sending it; the thread stays pending until a message is sent",
     )
     .option("--origin-kind <kind>", "Thread origin: fork")
     .option("--source-thread <id>", "Source thread for a fork")
@@ -639,6 +636,7 @@ export function registerSpawnCommand(
               ? { lifecycleOwnerThreadId: opts.lifecycleOwnerThread }
               : {}),
             ...(opts.section ? { sectionId: opts.section } : {}),
+            ...(opts.pinned ? { pinned: true } : {}),
             ...(opts.sourceThread ? { sourceThreadId: opts.sourceThread } : {}),
             ...(sourceSeqEnd !== undefined ? { sourceSeqEnd } : {}),
             ...(sendAt !== undefined ? { sendAt } : {}),
@@ -647,7 +645,6 @@ export function registerSpawnCommand(
               : {
                   experimental_pluginMetadataByPlugin: pluginMetadataByPlugin,
                 }),
-            ...(opts.draft ? { draft: true } : {}),
           });
         } catch (err: unknown) {
           throw prependErrorContext("Failed to create thread", err);
@@ -658,11 +655,6 @@ export function registerSpawnCommand(
         if (sendAt !== undefined) {
           console.log(
             `First message scheduled for ${new Date(sendAt).toLocaleString()}; the thread stays pending until then.`,
-          );
-        }
-        if (opts.draft) {
-          console.log(
-            `Saved as a draft; the thread stays pending until you send a message with \`bb thread tell ${thread.id}\`.`,
           );
         }
         // A hidden child reports to its parent too, so the promise follows the
