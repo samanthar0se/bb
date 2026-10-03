@@ -1,4 +1,4 @@
-import path from "node:path";
+import { joinHostPathSegments } from "../services/lib/host-path.js";
 import { serverAccess } from "../services/machines/server-access.js";
 import {
   getLatestSessionForHost,
@@ -139,7 +139,7 @@ export function registerHostRoutes(
     return context.json(await submitMachine(deps, payload), 201);
   });
 
-  post(routes.createJoinCode, async (context, payload) => {
+  post(routes.createJoinCode, async (context) => {
     assertHostManagementAllowed(context);
     const issued = await issueHostEnrollKey(deps, {
       enrollSource: "public-multi-machine",
@@ -171,7 +171,9 @@ export function registerHostRoutes(
       ...host,
       connectMachineId: requireMutableHost(deps, hostId).connectMachineId,
       threadStorageRootPath:
-        session === null ? null : path.join(session.dataDir, "thread-storage"),
+        session === null
+          ? null
+          : joinHostPathSegments(session.dataDir, "thread-storage"),
     });
   });
 

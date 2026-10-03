@@ -66,19 +66,18 @@ These local commands manage the machine's default launch target without a runnin
 
 `bb project show <id>` accepts `proj_personal` to inspect Personal.
 
+## prompt-history
+
+- `bb prompt-history`
+- `bb prompt-history list`
+
 ## provider
 
 - `bb provider`
 - `bb provider list`
+- `bb provider enable`
+- `bb provider disable`
 - `bb provider models`
-
-## manager
-
-- `bb manager`
-- `bb manager hire`
-- `bb manager list`
-- `bb manager status`
-- `bb manager delete`
 
 ## machine
 

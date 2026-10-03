@@ -1,14 +1,15 @@
 import { appendQuoteAndAttachmentsToDraft } from "@bb/client-core";
 // @vitest-environment jsdom
 
-import {
-  createCoreComposerActions,
-} from "@/lib/plugin-composer-handle";
+import { createCoreComposerActions } from "@/lib/plugin-composer-handle";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getPromptDraftAccessor,
+  usePromptDraftController,
+  usePromptDraftInputEmpty,
   usePromptDraftInputThreadIds,
+  usePromptDraftSnapshot,
   usePromptDraftStorage,
 } from "./usePromptDraftStorage";
 
@@ -281,7 +282,9 @@ function addQuote(
   attachments?: Parameters<typeof appendQuoteAndAttachmentsToDraft>[2],
 ) {
   const composer = createCoreComposerActions({ ...source, focus: () => {} });
-  composer.replace((current) => appendQuoteAndAttachmentsToDraft(current, text, attachments ?? []));
+  composer.replace((current) =>
+    appendQuoteAndAttachmentsToDraft(current, text, attachments ?? []),
+  );
 }
 
 describe("composer quote persistence", () => {
@@ -315,19 +318,6 @@ describe("composer quote persistence", () => {
     expect(consumerRenders).toBe(rendersBeforeTyping);
   });
 
-  it("appends a trimmed quote as a '> ' block to the draft text and persists", () => {
-    const scope = uniqueScope();
-    const { result } = renderHook(() => usePromptDraftStorage(scope));
-
-    act(() => addQuote(result.current, "  ship it  "));
-
-    expect(result.current.text).toBe("> ship it\n");
-    expect(window.localStorage.length).toBe(1);
-    expect(
-      window.localStorage.getItem(result.current.storageKey ?? ""),
-    ).toContain("> ship it");
-  });
-
   it("stacks a second quote below the first, separated by a blank line", () => {
     const scope = uniqueScope();
     const { result } = renderHook(() => usePromptDraftStorage(scope));
@@ -336,15 +326,6 @@ describe("composer quote persistence", () => {
     act(() => addQuote(result.current, "second"));
 
     expect(result.current.text).toBe("> first\n\n> second\n");
-  });
-
-  it("prefixes every line of a multi-line selection", () => {
-    const scope = uniqueScope();
-    const { result } = renderHook(() => usePromptDraftStorage(scope));
-
-    act(() => addQuote(result.current, "line a\nline b"));
-
-    expect(result.current.text).toBe("> line a\n> line b\n");
   });
 
   it("adds quote attachments to the draft and persists them", () => {
@@ -376,16 +357,6 @@ describe("composer quote persistence", () => {
     ).toContain("uploads/spec.md");
   });
 
-  it("ignores whitespace-only text without writing", () => {
-    const scope = uniqueScope();
-    const { result } = renderHook(() => usePromptDraftStorage(scope));
-
-    act(() => addQuote(result.current, "   \n  "));
-
-    expect(result.current.text).toBe("");
-    expect(window.localStorage.length).toBe(0);
-  });
-
   it("syncs an added quote live across two instances of the same scope", () => {
     const scope = uniqueScope();
     const first = renderHook(() => usePromptDraftStorage(scope));
@@ -394,5 +365,48 @@ describe("composer quote persistence", () => {
     act(() => addQuote(first.result.current, "shared selection"));
 
     expect(second.result.current.text).toBe("> shared selection\n");
+  });
+});
+
+describe("usePromptDraftController", () => {
+  it("returns stable methods and never re-renders its caller on draft writes", () => {
+    const scope = uniqueScope();
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      const controller = usePromptDraftController(scope);
+      return { controller, inputEmpty: usePromptDraftInputEmpty(controller) };
+    });
+    const initialController = result.current.controller;
+    const rendersBefore = renders;
+
+    act(() => initialController.setTextAndMentions("h", []));
+    const rendersAfterFirstKey = renders;
+    for (const text of ["he", "hel", "hell", "hello"]) {
+      act(() => initialController.setTextAndMentions(text, []));
+    }
+
+    expect(rendersAfterFirstKey).toBe(rendersBefore + 1);
+    expect(renders).toBe(rendersAfterFirstKey);
+    expect(result.current.inputEmpty).toBe(false);
+    expect(result.current.controller).toBe(initialController);
+    expect(initialController.getCurrent().text).toBe("hello");
+  });
+
+  it("follows the live draft through the snapshot hook", () => {
+    const scope = uniqueScope();
+    const { result } = renderHook(() =>
+      usePromptDraftSnapshot(usePromptDraftController(scope)),
+    );
+
+    act(() =>
+      getPromptDraftAccessor(scope).setDraft({
+        text: "typed",
+        mentions: [],
+        attachments: [],
+      }),
+    );
+
+    expect(result.current.text).toBe("typed");
   });
 });

@@ -100,7 +100,10 @@ import { useSidebarNavigation } from "@/hooks/queries/sidebar-navigation-query";
 import { useSystemConfig } from "@/hooks/queries/system-queries";
 import { useCommandSuggestions } from "@/hooks/useCommandSuggestions";
 import {
-  usePromptDraftStorage,
+  usePromptDraftController,
+  usePromptDraftInputEmpty,
+  usePromptDraftSnapshot,
+  type PromptDraftController,
   type PromptDraftScope,
 } from "@/hooks/usePromptDraftStorage";
 import { usePromptMentions } from "@/hooks/usePromptMentions";
@@ -210,7 +213,6 @@ interface NewThreadComposerPromptOptions {
   mentionMenuPlacement: NewThreadPromptBoxProps["mentionMenuPlacement"];
 }
 
-type PromptDraftController = ReturnType<typeof usePromptDraftStorage>;
 type ParsedEnvironment = ReturnType<typeof parseEnvironmentValue>;
 
 export interface NewThreadComposerState {
@@ -289,6 +291,33 @@ function NewThreadComposerStateRenderer({
   state: NewThreadComposerState;
 }) {
   return render(state);
+}
+
+type LiveDraftNewThreadPromptBoxProps = Omit<
+  NewThreadPromptBoxProps,
+  "attachments" | "history" | "mentionRanges" | "value"
+> & {
+  attachments: Omit<NewThreadPromptBoxProps["attachments"], "items">;
+  history: Omit<NewThreadPromptBoxProps["history"], "currentDraft">;
+  promptDraft: PromptDraftController;
+};
+
+function LiveDraftNewThreadPromptBox({
+  attachments,
+  history,
+  promptDraft,
+  ...promptBoxProps
+}: LiveDraftNewThreadPromptBoxProps) {
+  const draft = usePromptDraftSnapshot(promptDraft);
+  return (
+    <NewThreadPromptBox
+      {...promptBoxProps}
+      value={draft.text}
+      mentionRanges={draft.mentions}
+      history={{ ...history, currentDraft: draft }}
+      attachments={{ ...attachments, items: draft.attachments }}
+    />
+  );
 }
 
 type ProjectDefaultsState =
@@ -387,7 +416,7 @@ export function resolveNewThreadProjectDefaultsState({
   return queryIsError ? { status: "error" } : { status: "pending" };
 }
 
-export function mergeMissingPromptDraftAttachments(
+function mergeMissingPromptDraftAttachments(
   currentAttachments: readonly PromptDraftAttachment[],
   preservedAttachments: readonly PromptDraftAttachment[],
 ): PromptDraftAttachment[] | null {
@@ -882,7 +911,7 @@ export function NewThreadComposer({
     selectedProviderId,
     serviceTier,
     serviceTierSupportByProvider,
-    serviceTierFastLabel,
+    serviceTierOptions,
     setEnvironmentSelectionValue: setCreationEnvironmentSelectionValue,
     setPermissionMode,
     setProviderModelReasoning,
@@ -900,7 +929,7 @@ export function NewThreadComposer({
     [providerOptions],
   );
 
-  const promptDraft = usePromptDraftStorage(draftStorage);
+  const promptDraft = usePromptDraftController(draftStorage);
   const textEffects = useComposerTextEffects(promptDraft.storageKey);
   const promptOptionDraftSnapshotRef = useRef<PromptDraftState | null>(null);
   const snapshotDraftBeforeOptionChange = useCallback(() => {
@@ -1525,18 +1554,7 @@ export function NewThreadComposer({
     () => promptHistoryEntriesToDrafts(projectPromptHistory),
     [projectPromptHistory],
   );
-  const currentDraft = useMemo(
-    () => ({
-      text: promptDraft.text,
-      mentions: promptDraft.mentions,
-      attachments: promptDraft.attachments,
-    }),
-    [promptDraft.attachments, promptDraft.mentions, promptDraft.text],
-  );
-  const promptInput = useMemo(
-    () => promptDraftToInput(currentDraft),
-    [currentDraft],
-  );
+  const promptInputEmpty = usePromptDraftInputEmpty(promptDraft);
   const submitProgrammaticallyRef = useRef<
     (
       options: ExperimentalComposerSubmitOptions,
@@ -1593,7 +1611,7 @@ export function NewThreadComposer({
     modelLoadError,
     projectDefaultsStatus: projectDefaultsState.status,
     projectDefaultsUnavailable,
-    promptInputEmpty: promptInput.length === 0,
+    promptInputEmpty,
     providerDisplayName: selectedProviderDisplayName,
     selectedProviderId,
     selectedThreadModel,
@@ -1968,11 +1986,10 @@ export function NewThreadComposer({
       pickerLocksRef.current = locks;
       const disabledReason = options.blockedReason ?? submitDisabledReason;
       return (
-        <NewThreadPromptBox
+        <LiveDraftNewThreadPromptBox
+          promptDraft={promptDraft}
           id={options.id}
           focusRequest={promptBoxFocusRequest}
-          value={promptDraft.text}
-          mentionRanges={promptDraft.mentions}
           onChange={promptDraft.setTextAndMentions}
           onSubmit={() => void handleSubmit(options.blockedReason ?? null)}
           isSubmitting={isSubmitting}
@@ -1984,7 +2001,6 @@ export function NewThreadComposer({
           pluginComposerHost={options.pluginComposerHost ?? pluginComposerHost}
           textEffects={options.textEffects ?? textEffects}
           history={{
-            currentDraft,
             entries: promptHistoryDrafts,
             onSelectEntry: restoreHistoryDraft,
             resetKey: projectId,
@@ -2013,7 +2029,6 @@ export function NewThreadComposer({
             },
           }}
           attachments={{
-            items: promptDraft.attachments,
             pendingUploads,
             projectId,
             onAttachFiles: handleAttachFiles,
@@ -2131,7 +2146,7 @@ export function NewThreadComposer({
               onChange: handleServiceTierChange,
               supported: supportsServiceTier,
               supportByProvider: serviceTierSupportByProvider,
-              fastLabel: serviceTierFastLabel,
+              options: serviceTierOptions,
             },
             reasoning: {
               value: reasoningLevel,
@@ -2146,7 +2161,6 @@ export function NewThreadComposer({
       activeModel,
       attachmentError,
       commandSuggestions,
-      currentDraft,
       defaultMentionLinkResolver,
       effectiveEnvironmentValue,
       environmentProviders,
@@ -2210,7 +2224,7 @@ export function NewThreadComposer({
       inputsControlProviderIds,
       providerHostId,
       textEffects,
-      serviceTierFastLabel,
+      serviceTierOptions,
     ],
   );
 

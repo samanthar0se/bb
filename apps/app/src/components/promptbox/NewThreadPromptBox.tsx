@@ -42,7 +42,6 @@ import {
 } from "@/components/promptbox/PromptBoxInternal";
 import { usePromptModePermissionDisplay } from "@/components/promptbox/usePromptModePermissionDisplay";
 import { usePromptVoice } from "@/components/promptbox/usePromptVoice";
-import { useOptionalPaneContext } from "@/views/thread-detail/PaneContext";
 import {
   EnvironmentPickerUI,
   type EnvironmentPickerMachines,
@@ -180,7 +179,6 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
     if (focusRequest === undefined) return;
     promptBoxRef.current?.focusEnd();
   }, [focusRequest]);
-  const isFocusedPane = useOptionalPaneContext()?.isFocused ?? true;
   const focusDefault = useCallback(() => {
     promptBoxRef.current?.focusEnd();
     return promptBoxRef.current !== null;
@@ -201,8 +199,6 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
   const controller = useComposerExtensionController({
     host: pluginComposerHost ?? null,
     view: composerView,
-    isFocused: isFocusedPane,
-    isPrimary: true,
     focusDefault,
   });
 
@@ -233,6 +229,7 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
           execution={execution}
           voice={voice}
           onComposerLayoutChange={setComposerLayout}
+          onFocusCommand={controller.focus}
         />
       }
     />
@@ -246,6 +243,7 @@ interface DefaultNewThreadComposerProps extends Omit<
   promptBoxRef: RefObject<PromptBoxHandle | null>;
   voice: ReturnType<typeof usePromptVoice>;
   onComposerLayoutChange: (layout: ComposerView["layout"]) => void;
+  onFocusCommand: () => void;
 }
 
 const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
@@ -271,6 +269,7 @@ const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
   execution,
   voice,
   onComposerLayoutChange,
+  onFocusCommand,
 }: DefaultNewThreadComposerProps) {
   const isProjectlessPrompt = project?.value === null;
   const placeholder =
@@ -324,13 +323,17 @@ const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
           title: submitTitle,
         }}
         autoFocus={autoFocus}
+        onFocusCommand={onFocusCommand}
         editorLayout="root-compose"
         minHeight={NEW_THREAD_PROMPT_BOX_MIN_HEIGHT}
         placeholder={placeholder}
         header={modeConfig.header}
         footerStart={<ExecutionControls {...execution} />}
       />
-      <div className="mt-1 flex select-none items-center justify-between gap-2 px-3.5">
+      <div
+        data-new-thread-footer=""
+        className="mt-1 flex select-none items-center justify-between gap-2 px-3.5 max-md:mt-0 max-md:gap-1 max-md:px-1"
+      >
         <div className="flex min-w-0 flex-1 items-center gap-1">
           {project ? (
             <ProjectSelector

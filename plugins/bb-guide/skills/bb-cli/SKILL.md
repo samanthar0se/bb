@@ -46,6 +46,10 @@ one page.
   stdin. Inside double quotes the shell runs `backticks` and `$(...)` before
   bb sees the text, which silently corrupts Markdown and can execute commands.
 - Timeouts take seconds or a duration with a unit (`90s`, `20m`, `4h`).
+- Examples here use POSIX shell syntax. On a Windows machine the agent shell
+  is usually PowerShell: read an environment variable as `$env:NAME`
+  (`"$env:BB_THREAD_ID"`), separate commands with `;` instead of `&&`, and
+  continue a line with a backtick instead of a backslash.
 
 A standalone CLI targets http://127.0.0.1:38886. Use BB_SERVER_URL and
 BB_HOST_DAEMON_PORT only for an intentional non-default target.
@@ -111,7 +115,7 @@ BB_HOST_DAEMON_PORT only for an intentional non-default target.
   server. An imported server keeps its connect tunnel and bb account off
   until `bb server allow-connect`. On the computer a server moved away from,
   `bb server install-machine-service` installs the persistent, self-updating
-  machine service (needs Node.js 22.19+ on the PATH).
+  machine service (macOS and Linux only; needs Node.js 22.19+ on the PATH).
 - Use `bb machine suspend|resume <id-or-name>` only for providers that expose
   suspend and resume. Resume waits for pending suspension and is a no-op
   when already active. Use `bb machine retry-cleanup <id-or-name>` to retry a
@@ -184,7 +188,7 @@ environment variable. See `bb guide customization` for push controls.
 
 ## Built-in browser control
 
-Use `bb browser instances --host <host-id> --json` to discover a desktop. Commands `tabs`, `create`, `acquire`, `connection`, `release`, `reveal`, `capture`, `close`, and `watch` require explicit `--host`, `--instance`, `--generation`, and `--thread`. See `bb guide browser` and `bb browser --help` for flags. New tabs use separate automation profiles; personal-tab control needs an explicit handoff. Revealing tabs or acquiring control opens the side panel and selects the tab only in the already focused thread, without switching threads or activating the desktop window. Connection credentials are written with `connection --output <new-file>` and work only on the browser host; keep them out of chat and public port shares. `import-sources` and `import-cookies --from <source> --profile <dir> [--into personal|automation:<id>]` combine known-browser entries (including Helium and Dia) with schema-detected Chromium/Firefox profiles matched to registered web browsers and copy a selected profile into BB; use the returned source ID, including opaque `storage-…` IDs, rather than assuming a fixed browser list; they need `--host`, `--instance`, and `--generation` only, and the source browser must be quit first.
+Use `bb browser instances --host <host-id> --json` to discover a desktop. Commands `tabs`, `create`, `acquire`, `connection`, `release`, `reveal`, `capture`, `close`, and `watch` require explicit `--host`, `--instance`, `--generation`, and `--thread`. See `bb guide browser` and `bb browser --help` for flags. All tabs, including agent-created ones, share the BB browser profile and its signed-in cookies. Revealing tabs or acquiring control opens the side panel and selects the tab only in the already focused thread, without switching threads or activating the desktop window. Connection credentials are written with `connection --output <new-file>` and work only on the browser host; keep them out of chat and public port shares. `import-sources` and `import-cookies --from <source> --profile <dir>` combine known-browser entries (including Helium and Dia) with schema-detected Chromium/Firefox profiles matched to registered web browsers and copy a selected profile into BB; use the returned source ID, including opaque `storage-…` IDs, rather than assuming a fixed browser list; they need `--host`, `--instance`, and `--generation` only, and the source browser must be quit first.
 
 `bb machine show <id-or-name> --json` includes provider-owned inventory and
 estimates in `providerDetails` when available. Provider inventory failures are
@@ -197,3 +201,10 @@ and no open terminals; empty machines can use an opted-in provider idle policy.
 suspended state through the provider and waits for completion. It leaves active
 machines and in-progress lifecycle operations alone. Use `machine suspend` to
 request a new pause. Core does not schedule reconciliation polling.
+
+Provider management lives in Settings → Providers. Use `bb provider list --all`
+for the global catalog, `bb provider disable ID` to hide one provider and prevent
+new turns, and `bb provider enable ID` to restore it (enabling its plugin if
+needed). These preserve the CLI and thread history. Individual opt-outs survive
+plugin off/on. Install provider plugins in Settings → Plugins; configure custom
+ACP agents in the ACP providers plugin settings.

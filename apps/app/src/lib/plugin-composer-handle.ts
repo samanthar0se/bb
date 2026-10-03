@@ -207,6 +207,10 @@ function composerHandleTarget(source: ComposerSource): ComposerHandleTarget {
     ...draftTarget,
     key,
     scope: source.scope,
+    openPopup: (pluginId, id) =>
+      getComposerEditorBridge(key)?.openPopup(pluginId, id) ?? false,
+    closePopup: (pluginId) =>
+      getComposerEditorBridge(key)?.closePopup(pluginId) ?? false,
     getAttachmentCount: () => source.getCurrent().attachments.length,
     getSelection: () => source.getSelection?.() ?? null,
     ...(source.getPluginMetadata === undefined

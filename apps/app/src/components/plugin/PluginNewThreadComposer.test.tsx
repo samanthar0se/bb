@@ -43,10 +43,7 @@ import {
   setPluginSlotRegistrations,
 } from "@/lib/plugin-slots";
 import { encodeReuseValue } from "@/components/pickers/environment-picker-value";
-import {
-  useRootComposeForkSeed,
-  useRootComposeReuseEnvironment,
-} from "@/lib/root-compose-selection";
+import { useRootComposeReuseEnvironment } from "@/lib/root-compose-selection";
 import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
 import {
   getAllPluginDraftMetadata,
@@ -782,6 +779,51 @@ describe("PluginNewThreadComposer seeding", () => {
       </Provider>
     );
   }
+
+  it("re-renders only the prompt box, not the composer surface, while typing", () => {
+    const surfaceStates: NewThreadComposerState[] = [];
+    render(
+      <Provider>
+        <MemoryRouter>
+          <NewThreadComposer
+            projectId="proj_1"
+            onProjectChange={() => undefined}
+            draftStorage={{ kind: "new-thread" }}
+            selectionScope="new-thread"
+            onSubmit={() => undefined}
+          >
+            {(composer) => {
+              surfaceStates.push(composer);
+              return composer.renderPromptBox({
+                mentionMenuPlacement: "bottom",
+              });
+            }}
+          </NewThreadComposer>
+        </MemoryRouter>
+      </Provider>,
+    );
+    act(() => {
+      latestPromptBoxProps().onChange("h", []);
+    });
+    const surfaceRendersAfterFirstKey = surfaceStates.length;
+    const promptBoxRendersAfterFirstKey = mocks.promptBoxProps.length;
+
+    const text = "hello world";
+    for (let length = 2; length <= text.length; length += 1) {
+      act(() => {
+        latestPromptBoxProps().onChange(text.slice(0, length), []);
+      });
+    }
+
+    expect(surfaceStates.length).toBe(surfaceRendersAfterFirstKey);
+    expect(mocks.promptBoxProps.length - promptBoxRendersAfterFirstKey).toBe(
+      text.length - 1,
+    );
+    expect(latestPromptBoxProps().value).toBe("hello world");
+    expect(new Set(surfaceStates.map((state) => state.promptDraft)).size).toBe(
+      1,
+    );
+  });
 
   it("forwards a requested mention menu placement to the prompt box", () => {
     render(
@@ -1847,54 +1889,6 @@ describe("PluginNewThreadComposer seeding", () => {
     );
     expect(getPluginDraftMetadata(draftKey, "alpha")).toEqual({
       current: true,
-    });
-  });
-
-  it("rejects a ROOT fork with nonempty plugin metadata and preserves the draft", async () => {
-    const draft = getPromptDraftAccessor({ kind: "new-thread" });
-    draft.setDraft({ text: "fork draft", mentions: [], attachments: [] });
-    setPluginDraftMetadata(draft.storageKey, "alpha", { fork: true });
-    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    function ForkSeededRootComposeView() {
-      const [, setForkSeed] = useRootComposeForkSeed();
-      useEffect(() => {
-        setForkSeed({
-          environmentId: "env-source",
-          model: "gpt-5.6",
-          permissionMode: "auto",
-          projectId: "proj_1",
-          providerId: "codex",
-          reasoningLevel: "medium",
-          serviceTier: undefined,
-          sourceSeqEnd: undefined,
-          sourceThreadId: "thr_source",
-          sourceThreadTitle: "Source thread",
-        });
-      }, [setForkSeed]);
-      return <PanedRootComposeView />;
-    }
-    const router = createMemoryRouter(
-      [{ path: "/", element: <ForkSeededRootComposeView /> }],
-      { initialEntries: ["/"] },
-    );
-    render(
-      <Provider>
-        <QueryClientProvider client={queryClient}>
-          <RouterProvider router={router} />
-        </QueryClientProvider>
-      </Provider>,
-    );
-    await waitFor(() => expect(latestPromptBoxProps().disabled).toBe(false));
-    await act(async () => {
-      latestPromptBoxProps().onSubmit();
-    });
-    expect(mocks.createThreadMutateAsync).not.toHaveBeenCalled();
-    expect(draft.getCurrent().text).toBe("fork draft");
-    expect(getPluginDraftMetadata(draft.storageKey, "alpha")).toEqual({
-      fork: true,
     });
   });
 

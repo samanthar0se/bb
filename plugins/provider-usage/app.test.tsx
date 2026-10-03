@@ -219,7 +219,7 @@ describe("provider usage footer disclosure", () => {
     vi.stubGlobal("fetch", fetchMock);
     const app = await loadPluginApp(() => import("./app"));
     const mounted = await mountPluginContentScripts(app, {
-      pluginId: "provider-usage",
+      pluginId: "bb--provider-usage",
     });
     const item = app.experimentalSidebarFooterItems[0];
     expect(item).toMatchObject({
@@ -232,7 +232,7 @@ describe("provider usage footer disclosure", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/v1/plugins/provider-usage/rpc/getUsage",
+        "/api/v1/plugins/bb--provider-usage/rpc/getUsage",
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
@@ -249,6 +249,7 @@ describe("provider usage footer disclosure", () => {
       item,
       { dismiss },
       {
+        pluginId: "bb--provider-usage",
         context: { threadId: "thread-active" },
         sidebarThreads: {
           threads: [threadOnMachine("host-m5", "M5")],
@@ -265,18 +266,17 @@ describe("provider usage footer disclosure", () => {
     ).toBe("true");
     expect(
       slot
-        .getAllByRole("listitem")
+        .getAllByRole("region")
         .map((row) => row.getAttribute("aria-label")),
     ).toEqual([
       "Codex team@example.com",
       "Codex personal@example.com",
       "Claude Code claude-team@example.com",
     ]);
-    expect(slot.queryByRole("heading")).toBeNull();
     for (const providerId of ["codex", "claude-code"]) {
       await waitFor(() =>
         expect(fetchMock).toHaveBeenCalledWith(
-          "/api/v1/plugins/provider-usage/rpc/getUsage",
+          "/api/v1/plugins/bb--provider-usage/rpc/getUsage",
           expect.objectContaining({
             body: JSON.stringify({
               force: false,
@@ -296,12 +296,13 @@ describe("provider usage footer disclosure", () => {
     const machinePicker = slot.getByRole("button", {
       name: "Usage machine: M5",
     });
-    expect(slot.getByRole("heading", { name: "Codex" })).toBeTruthy();
-    expect(slot.getByText("codex@example.com")).toBeTruthy();
+    expect(
+      slot.getByRole("heading", { name: "codex@example.com" }),
+    ).toBeTruthy();
     expect(slot.getByText("97%")).toBeTruthy();
-    expect(localStorage.getItem("bb.test-plugin.selected-machine.v1")).toBe(
-      "host-m5",
-    );
+    expect(
+      localStorage.getItem("bb.bb--provider-usage.selected-machine.v1"),
+    ).toBe("host-m5");
 
     fireEvent.pointerDown(machinePicker, { button: 0 });
     fireEvent.click(slot.getByRole("menuitemradio", { name: "M4" }));
@@ -321,13 +322,15 @@ describe("provider usage footer disclosure", () => {
     expect(
       codexTab.querySelector("[data-provider-logo*='/codex/']"),
     ).not.toBeNull();
-    expect(slot.getByRole("heading", { name: "Claude Code" })).toBeTruthy();
-    expect(slot.getByText("claude@example.com")).toBeTruthy();
+    expect(
+      slot.getByRole("heading", { name: "claude@example.com" }),
+    ).toBeTruthy();
     expect(slot.getByText("82%")).toBeTruthy();
 
     fireEvent.click(codexTab);
-    expect(slot.getByRole("heading", { name: "Codex" })).toBeTruthy();
-    expect(slot.getByText("codex@example.com")).toBeTruthy();
+    expect(
+      slot.getByRole("heading", { name: "codex@example.com" }),
+    ).toBeTruthy();
     expect(slot.getByText("37%")).toBeTruthy();
     fireEvent.keyDown(codexTab, { key: "ArrowLeft" });
     expect(claudeTab.getAttribute("aria-selected")).toBe("true");
@@ -528,11 +531,15 @@ it.each([
   );
   const app = await loadPluginApp(() => import("./app"));
   const mounted = await mountPluginContentScripts(app, {
-    pluginId: "provider-usage",
+    pluginId: "bb--provider-usage",
   });
   const item = app.experimentalSidebarFooterItems[0];
   if (item?.kind !== "disclosure") throw new Error("missing disclosure");
-  const slot = renderSlot(item, { dismiss: vi.fn() });
+  const slot = renderSlot(
+    item,
+    { dismiss: vi.fn() },
+    { pluginId: "bb--provider-usage" },
+  );
   await waitFor(() =>
     expect(slot.getByText(expected, { exact: false })).toBeTruthy(),
   );

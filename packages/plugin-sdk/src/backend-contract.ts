@@ -1304,7 +1304,7 @@ export interface PluginProviderCapabilities {
  * Provider copy core surfaces render from per-provider tables today (usage
  * banners, sign-in hints, the mobile picker, the agent guide). Declared once
  * here so no core surface keys copy on a provider id. Mirrors
- * `ProviderStrings` in `@bb/domain`, which is the client projection.
+ * `providerStringsSchema` in `@bb/domain`, which is the client projection.
  */
 export interface PluginProviderStrings {
   /** How to sign in on the host ("Run `claude` on the machine to sign in."). */
@@ -1520,8 +1520,10 @@ export interface PluginProviderDeclaration {
   /** Provider copy for core surfaces ({@link PluginProviderStrings}). */
   strings?: PluginProviderStrings;
   /** Service tiers this provider accepts, as picker options. Non-empty when
-   * present, unique ids. The coarse `capabilities.supportsServiceTier` stays
-   * until WS2a stabilizes. */
+   * present, unique ids. Ids are open: `"default"` is the provider's standard
+   * tier and every other id is passed to the bridge as `serviceTier`. A
+   * `model/list` entry narrows the list with `supportedServiceTiers`. The
+   * coarse `capabilities.supportsServiceTier` stays until WS2a stabilizes. */
   serviceTiers?: readonly PluginProviderOptionDescriptor[];
   /** Reasoning levels as picker options with labels, beside the coarse
    * `capabilities.reasoningLevels` ladder (ids only). Non-empty when present,

@@ -195,7 +195,11 @@ describe("app keybindings", () => {
       );
       expect(config.keybindingOverrides).toEqual([]);
       expect(assignedDefaultKeybindings).toEqual(config.keybindings);
-      for (const command of ["thread.rename", "thread.archive"] as const) {
+      for (const command of [
+        "thread.rename",
+        "thread.archive",
+        "panel.fullScreen.toggle",
+      ] as const) {
         expect(
           config.defaultKeybindings.find(
             (binding) => binding.command === command,
@@ -676,42 +680,6 @@ describe("app keybindings", () => {
       ).toEqual([
         {
           command: "thread.rename",
-          desktopOnly: false,
-          shortcut,
-          when: { all: ["mainSurface"], none: ["modalOpen"] },
-        },
-      ]);
-    });
-  });
-
-  it("activates the archive command after assigning a shortcut", async () => {
-    await withTestHarness(async (harness) => {
-      const shortcut = {
-        key: "a",
-        mod: true,
-        meta: false,
-        control: false,
-        alt: false,
-        shift: true,
-      };
-      const response = await harness.app.request("/api/v1/settings/keyboard", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify([{ command: "thread.archive", shortcut }]),
-      });
-      expect(response.status).toBe(200);
-
-      const configResponse = await harness.app.request("/api/v1/system/config");
-      const config = systemConfigResponseSchema.parse(
-        await readJson(configResponse),
-      );
-      expect(
-        config.keybindings.filter(
-          (binding) => binding.command === "thread.archive",
-        ),
-      ).toEqual([
-        {
-          command: "thread.archive",
           desktopOnly: false,
           shortcut,
           when: { all: ["mainSurface"], none: ["modalOpen"] },

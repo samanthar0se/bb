@@ -102,6 +102,19 @@ family without moving the session's main pin or the provider cursor. The cursor
 and session pins survive hub restarts. Session pins expire after 30 idle minutes,
 and the pool retains the 4,096 most recently used pins.
 
+Claude accounts can fall back to enabled extra usage after subscription windows
+reach the switch threshold. Accounts below the threshold take precedence, even
+for conversations pinned to an extra-usage fallback, and exhausted accounts are
+rechecked before spending extra usage. `bb pool status` and `account list` show
+an Extra usage column; JSON exposes `extraUsage` with status, observation time,
+and source. The pool does not enable extra usage or change Claude spending limits.
+
+Codex accounts use the same fallback policy when credit availability is reported.
+Spending-control and explicit credit-depletion restrictions still block routing;
+account/status JSON exposes them under `usageRestriction`. Both providers show
+an “Extra usage available” pill when allowance is reported available. The pill
+does not indicate current billing activity.
+
 Use the up/down arrows in Account Pooler settings, or
 `bb pool account reorder <claude|codex> <id>...`, to set the complete order for
 one provider. Include disabled accounts too. Reordering changes the next failover
@@ -491,6 +504,13 @@ them itself rather than repeating a publisher's claim.
 BB Official entries use the same counts. bb finds each count in the BB
 Community `stats.json` file by the plugin id.
 
+The store, getbb.app, and the Installs column of `bb plugin search` turn
+each count into the same badge. Plugins that ship installed with bb show
+"Built in". A count of 25 or more shows as is. Below 25, a plugin published
+in the last 30 days shows "New", and an older one shows its real count.
+`bb plugin search --json` returns the raw `installs` and
+`installedByDefault` fields.
+
 Third-party marketplaces
 
 Anyone can host a marketplace manifest. Add one with its https manifest URL,
@@ -589,7 +609,9 @@ version tags such as `v1` and `v1.2.3` are always the literal tag.
 
 `bb plugin search <query>` matches an id, name, description, category, or tag.
 It searches bb-official and each other registered marketplace. The output has a
-Category column. Status shows installed, compatible, or requires newer bb.
+Category column. Status shows installed, compatible, requires newer bb, or
+`id in use by <source>` when another installed plugin, such as a local `path:`
+checkout, already uses the entry's id.
 Install a bundled plugin by its bare name. Direct
 HTTP(S) Git repository URLs, `path:`, `npm:`, `git:`, and `builtin:`
 sources—and path-like syntax—continue to bypass official-plugin resolution.
@@ -652,9 +674,6 @@ Path installs compile server.ts into a versioned bb-owned cache and load the
 result with native ESM. The cache follows source, SDK, bb, and Node versions,
 so `bb plugin dev`/reload sees edits immediately without running the source
 transformer on the server event loop.
-The Legacy plugin loader (JITI) experiment restores the previous loader on the
-next install, reload, enable, update, or server restart; running instances are
-unchanged when the experiment is toggled.
 
 `bb plugin dev` is the edit loop: it requires the directory to already be
 installed as a plugin (`bb plugin install .` first), ignores dist/,

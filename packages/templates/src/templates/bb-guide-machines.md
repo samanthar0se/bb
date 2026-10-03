@@ -192,12 +192,6 @@ checks report unavailable without acquiring a grant. Settings and creation
 banners refresh this status when the access provider signals a change. Machines use this
 access for ongoing runtime requests, including account-pool endpoints.
 
-The Tailscale plugin can supply private machine access without a Direct URL.
-Use `bb tailscale devices`, `bb tailscale status`, and `bb tailscale configure
-<port>` to discover devices and validate a dedicated existing HTTPS Serve
-mapping. Choose Tailscale explicitly; it is not selected by default.
-The plugin skill documents SSH prerequisites and safe endpoint cleanup.
-
 ## Move the server
 
 Moving the server is experimental and off by default. Turn on the `serverMove`
@@ -282,7 +276,8 @@ if the service is missing; until that succeeds (it needs Node.js 22.19 or newer
 on the PATH), the app keeps that machine connected only while it is open and
 explains why once. After a move from `bb-app`, or to retry by hand,
 `bb server install-machine-service [--data-dir <dir>] [--yes] [--json]` installs
-the same service: it needs
+the same service on macOS and Linux (on Windows it refuses, because the service
+is launchd or systemd): it needs
 Node.js 22.19 or newer on the PATH, stops bb running from that directory, and
 runs `install-machine.sh --adopt --data-dir <dir>`, which keeps the machine ID,
 downloads the new server's bb-app package, and installs the launchd or systemd
@@ -349,7 +344,9 @@ The CLI refuses another host or server identity in the selected machine director
 
 The manual copy command fetches `/install.sh` using a short-lived `X-BB-Enrollment` header. The server supplies the bootstrap only for a pending, unexpired, uncancelled manual enrollment whose credential has not been consumed; downloaded responses are not cached. On an invalid credential, the server returns a shell error that prints the reason when piped to `sh`. The command contains no bootstrap JSON or access-provider credentials.
 
-The installer accepts `--bootstrap-env <NAME>` and uses the same enrollment command. It installs a private CLI and supplies `~/.local/bin/bb` without replacing an existing path. Non-login transports can use `command -v bb` with `~/.local/bin/bb` as a fallback. Linux machines without a systemd user session run a detached daemon; systemd and launchd machines receive a persistent service.
+A Windows machine uses the PowerShell form of the command, which fetches `/install.ps1` with the same header and pipes it to `iex`. That script runs a Node installer: it installs the server's host package under `%USERPROFILE%\.bb-machines\<server-host>\npm`, enrolls, starts the daemon without a window, and registers it in the user's `Run` registry key so it starts at sign-in. Node.js 22.19 or newer must be on PATH. The installer leaves a copy of itself in the machine directory; `node <machine-dir>\install-machine-windows.mjs --stop|--start|--uninstall --host-id <id>` manages the daemon. On an invalid credential the server returns a script that throws the reason.
+
+The installer accepts `--bootstrap-env <NAME>` and uses the same enrollment command. It installs a private CLI and supplies `~/.local/bin/bb` without replacing an existing path. Non-login transports can use `command -v bb` with `~/.local/bin/bb` as a fallback. On Linux, the installer retries the user systemd bus using the current user's runtime path from `loginctl` when the caller's session environment is incomplete. If the bus is still unavailable on a systemd host, installation fails before enrolling; containers and machines without systemd as init run a detached daemon. `BB_INSTALL_SKIP_SERVICE=1` explicitly leaves a detached daemon without startup after reboot. The temporary daemon used for a first join is not supervised; when the installer starts a previously joined daemon without a service, its launcher restarts it after crashes and self-updates while running. systemd and launchd services provide persistent restarts.
 
 Machine bootstrap v2 supplies optional server request headers. `bb machine enroll`
 persists them privately as `serverHeaders`; the launcher passes `BB_SERVER_HEADERS`
@@ -359,45 +356,14 @@ upgraded by the server when prepared again.
 
 Delivered enrollment bundles from v1 remain valid until their expiry. The CLI accepts both file and environment forms, upgrades the bundle to v2 headers locally, and persists legacy Connect redemption before enrollment so a retry reuses it. The installer upgrades v1 environment bundles before authenticated artifact downloads.
 
-## DigitalOcean dev boxes
-
-`bb digitalocean configure <host-id> '<config-json>'` sets `idleMinutes` (null
-turns idle stop off), `retention` (default 2), and `schedule` (null disables;
-otherwise `weekdays` 0–6, `sleep`/`wake` HH:mm, and explicit IANA `timezone`).
-`bb digitalocean snapshot-now <host-id>` drains through core, gracefully shuts
-down, confirms off, snapshots and remains off. `sleep` does the same; `wake`
-resumes through core. Busy threads and open terminals prevent sleep. Core also
-wakes on dispatch. Empty boxes participate in opt-in idle stop; retirement stays
-never. `status` and `cost` show live inventory and estimates; all accept `--json`.
-`bb machine show <host-id> --json` includes provider inventory in `providerDetails`.
-
-Powered-off droplets still bill; snapshot storage bills per GB. See
-https://docs.digitalocean.com/products/droplets/details/pricing/ and
-https://docs.digitalocean.com/products/snapshots/details/pricing/ . Configure a
-weekday schedule from the plugin settings or CLI on an always-on BB server.
-The latest missed action within eight days runs after recovery; busy sleep
-retries each minute until superseded. See the plugin skill for DST and cleanup.
-
-Resume waits for any in-progress suspension before waking; an already-active
-machine is left active. DigitalOcean sleep JSON retains saved power/backup
-status if inventory is unavailable (`details.values.cost: null` and
-`inventoryError`). Shared inventory reads cache for 30 seconds and invalidate
-on mutations. Schedule changes invalidate selected, undispatched runs.
-
-Create DigitalOcean dev boxes from Settings → Machines or
-`bb machine create --provider digitalocean --inputs '{}' --json`, without a
-project. SDK creation uses `machineProviderId: "digitalocean", projectId: null,
-inputs: {}`. Enrolled boxes appear as machine sections in the composer picker;
-DigitalOcean contributes no new-machine/project-checkout shortcut row.
-
-Existing machines
+## Existing machines
 
 `bb machine create --provider manual` waits for a private enrollment command,
 prints it once, and follows the host until the daemon connects. Run that command on the target
 machine; it installs bb if needed. Server access is resolved through the selected
 default access provider, just like SSH or cloud machines. `--no-wait` returns the
-creating host ID. The CLI prints the enrollment command and its expiry while it
-follows. This command is built transiently from the in-memory pending bundle;
+creating host ID. The CLI prints the enrollment command for macOS and Linux, the
+PowerShell command for Windows, and their expiry while it follows. This command is built transiently from the in-memory pending bundle;
 durable host progress contains no credential. After enrollment or removal, the
 host-keyed command endpoint returns no command. Treat it as a credential.
 

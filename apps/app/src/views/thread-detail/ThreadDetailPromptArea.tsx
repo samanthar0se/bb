@@ -84,7 +84,10 @@ import {
   QueuedMessagesPendingCard,
   type QueuedMessageInlineEditor,
 } from "@/components/promptbox/banner/LazyQueuedMessagesList";
-import { ThreadEnvironmentSummary } from "@/components/promptbox/ThreadEnvironmentSummary";
+import {
+  ThreadDetailsButton,
+  ThreadEnvironmentSummary,
+} from "@/components/promptbox/ThreadEnvironmentSummary";
 import type { MachineLabelHost } from "@/components/machines/MachineLabel";
 import type { MachineProviderPresentation } from "@/components/plugin/MachineProviderIcon";
 import type { WorkspaceCheckoutDisplay } from "@/lib/workspace-checkout-display";
@@ -193,6 +196,7 @@ interface ThreadDetailPromptAreaProps {
   environmentLabel?: string;
   environmentProviderName?: string;
   onCreateNewThreadInEnvironment?: () => void;
+  onOpenThreadInfo?: () => void;
   onPullRequestDraft?: () => void;
   onPullRequestMerge?: (method: PullRequestMergeMethod) => void;
   onPullRequestReady?: () => void;
@@ -407,6 +411,7 @@ export function ThreadDetailPromptArea({
   environmentLabel,
   environmentProviderName,
   onCreateNewThreadInEnvironment,
+  onOpenThreadInfo,
   onPullRequestDraft,
   onPullRequestMerge,
   onPullRequestReady,
@@ -685,7 +690,7 @@ export function ThreadDetailPromptArea({
     supportsPermissionModeSelection,
     supportsServiceTier,
     serviceTierSupportByProvider,
-    serviceTierFastLabel,
+    serviceTierOptions,
     executionInputSources,
   } = useThreadCreationOptions({
     enabled: thread.archivedAt === null,
@@ -1609,7 +1614,7 @@ export function ThreadDetailPromptArea({
         onChange: setServiceTier,
         supported: supportsServiceTier,
         supportByProvider: serviceTierSupportByProvider,
-        fastLabel: serviceTierFastLabel,
+        options: serviceTierOptions,
       },
       reasoning: {
         value: reasoningLevel,
@@ -1649,7 +1654,7 @@ export function ThreadDetailPromptArea({
       setReasoningLevel,
       setServiceTier,
       supportsServiceTier,
-      serviceTierFastLabel,
+      serviceTierOptions,
       thread.environmentId,
       thread.providerId,
     ],
@@ -1740,6 +1745,34 @@ export function ThreadDetailPromptArea({
       thread.environmentId,
     ],
   );
+  const compactEnvironmentSummary = useMemo(() => {
+    if (!onOpenThreadInfo) return null;
+    if (environmentCheckout) {
+      return (
+        <ThreadDetailsButton
+          icon="GitBranch"
+          label={environmentCheckout.label}
+          onOpenDetails={onOpenThreadInfo}
+        />
+      );
+    }
+    if (environmentLabel) {
+      return (
+        <ThreadDetailsButton
+          icon={environmentIcon ?? "Layers"}
+          label={environmentCompactLabel ?? environmentLabel}
+          onOpenDetails={onOpenThreadInfo}
+        />
+      );
+    }
+    return null;
+  }, [
+    environmentCheckout,
+    environmentCompactLabel,
+    environmentIcon,
+    environmentLabel,
+    onOpenThreadInfo,
+  ]);
   const activePromptModeCard = useMemo(
     () => (
       <ThreadPromptModeCard
@@ -2283,6 +2316,7 @@ export function ThreadDetailPromptArea({
       collapseResetKey={thread.id}
       focusEndKey={bottomFocusEndKey}
       environmentSummary={environmentSummary}
+      compactEnvironmentSummary={compactEnvironmentSummary}
       contextWindowUsage={contextWindowUsage ?? null}
       execution={bottomExecutionConfig}
       permission={bottomPermissionConfig}

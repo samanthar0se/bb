@@ -1,15 +1,22 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { ComposerView } from "@get-bb/plugin-sdk";
+import { useState, type ReactNode } from "react";
+import type { PromptDraftState } from "@bb/client-core";
+import type { ComposerView, PluginComposerApi } from "@get-bb/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PluginComposerHostProvider,
   type PluginComposerHost,
-  PluginComposerViewContext,
 } from "@/components/plugin/plugin-composer-host";
-import { useComposerView } from "./plugin-sdk-hooks";
+import { useComposer, useComposerView } from "./plugin-sdk-hooks";
 import { PluginContext } from "@/components/plugin/plugin-context";
 import {
   getPluginDraftMetadata,
@@ -17,18 +24,29 @@ import {
   subscribePluginDraftMetadata,
 } from "@/hooks/usePluginDraftMetadataStorage";
 
-const mocks = vi.hoisted(() => ({ usePromptDraftStorage: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  usePromptDraftController: vi.fn(),
+  view: undefined as ComposerView | undefined,
+}));
+
+vi.mock("@/components/plugin/plugin-composer-host", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/components/plugin/plugin-composer-host")
+    >();
+  return { ...actual, useOptionalPluginComposerView: () => mocks.view };
+});
 
 vi.mock("@/hooks/usePromptDraftStorage", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/hooks/usePromptDraftStorage")>();
   return {
     ...actual,
-    usePromptDraftStorage: (
-      ...args: Parameters<typeof actual.usePromptDraftStorage>
+    usePromptDraftController: (
+      ...args: Parameters<typeof actual.usePromptDraftController>
     ) => {
-      mocks.usePromptDraftStorage(...args);
-      return actual.usePromptDraftStorage(...args);
+      mocks.usePromptDraftController(...args);
+      return actual.usePromptDraftController(...args);
     },
   };
 });
@@ -48,20 +66,22 @@ function ComposerViewProbe() {
 }
 
 function Harness({ view }: { view: ComposerView | undefined }) {
+  mocks.view = view;
   return (
     <MemoryRouter initialEntries={["/"]}>
-      <PluginComposerViewContext.Provider value={view}>
-        <ComposerViewProbe />
-      </PluginComposerViewContext.Provider>
+      <ComposerViewProbe />
     </MemoryRouter>
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mocks.view = undefined;
+});
 
 describe("useComposerView", () => {
   it("keeps hook order when the host view appears and disappears", () => {
-    mocks.usePromptDraftStorage.mockClear();
+    mocks.usePromptDraftController.mockClear();
     const view: ComposerView = {
       scope: { kind: "new-thread", projectId: null },
       layout: "expanded",
@@ -70,16 +90,16 @@ describe("useComposerView", () => {
       run: { isRunning: false, isSubmitting: false },
     };
     const rendered = render(<Harness view={view} />);
-    expect(mocks.usePromptDraftStorage).toHaveBeenCalledTimes(1);
+    expect(mocks.usePromptDraftController).toHaveBeenCalledTimes(1);
 
     expect(screen.getByTestId("selected-provider").textContent).toBe("codex");
 
     rendered.rerender(<Harness view={undefined} />);
-    expect(mocks.usePromptDraftStorage).toHaveBeenCalledTimes(2);
+    expect(mocks.usePromptDraftController).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("selected-provider").textContent).toBe("null");
 
     rendered.rerender(<Harness view={view} />);
-    expect(mocks.usePromptDraftStorage).toHaveBeenCalledTimes(3);
+    expect(mocks.usePromptDraftController).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId("selected-provider").textContent).toBe("codex");
   });
   it("keeps legacy view metadata reactive and scoped to the calling plugin", () => {
@@ -120,4 +140,103 @@ describe("useComposerView", () => {
       '{"issue":"BB-43"}',
     );
   });
+});
+
+function trackedHost(): PluginComposerHost {
+  let draft: PromptDraftState = { text: "", mentions: [], attachments: [] };
+  const listeners = new Set<() => void>();
+  return {
+    scope: { kind: "thread", threadId: "thr_tracking" },
+    textEffectKey: "thread/thr_tracking",
+    getCurrent: () => draft,
+    subscribeDraft: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    setDraft: (next) => {
+      draft = next;
+      for (const listener of [...listeners]) listener();
+    },
+    focus: () => {},
+  };
+}
+
+function TrackingHarness({
+  host,
+  children,
+}: {
+  host: PluginComposerHost;
+  children: ReactNode;
+}) {
+  return (
+    <MemoryRouter>
+      <PluginContext.Provider value="tracking">
+        <PluginComposerHostProvider value={host}>
+          {children}
+        </PluginComposerHostProvider>
+      </PluginContext.Provider>
+    </MemoryRouter>
+  );
+}
+
+it("preserves upstream quiet draft consumers alongside local composer metadata subscriptions", () => {
+  const host = trackedHost();
+  const quiet = vi.fn<(composer: PluginComposerApi) => void>(),
+    reading = vi.fn();
+  function Quiet() {
+    const composer = useComposer();
+    quiet(composer);
+    return (
+      <button onClick={() => composer.updateText((t) => t + "!")}>
+        update
+      </button>
+    );
+  }
+  function Reading() {
+    const composer = useComposer();
+    reading();
+    return <div data-testid="tracking-text">{composer.text}</div>;
+  }
+  render(
+    <TrackingHarness host={host}>
+      <Quiet />
+      <Reading />
+    </TrackingHarness>,
+  );
+  const q = quiet.mock.calls.length,
+    r = reading.mock.calls.length;
+  for (const text of ["a", "ab", "abc"])
+    act(() => host.setDraft({ text, mentions: [], attachments: [] }));
+  expect(quiet).toHaveBeenCalledTimes(q);
+  expect(reading).toHaveBeenCalledTimes(r + 3);
+  expect(screen.getByTestId("tracking-text").textContent).toBe("abc");
+  fireEvent.click(screen.getByText("update"));
+  expect(host.getCurrent().text).toBe("abc!");
+});
+
+it("preserves upstream late draft tracking after a consumer starts reading", () => {
+  const host = trackedHost();
+  function Late() {
+    const composer = useComposer();
+    const [reading, setReading] = useState(false);
+    return (
+      <>
+        <button onClick={() => setReading(true)}>read</button>
+        <div data-testid="late-tracking">
+          {reading ? composer.text : "not reading"}
+        </div>
+      </>
+    );
+  }
+  render(
+    <TrackingHarness host={host}>
+      <Late />
+    </TrackingHarness>,
+  );
+  act(() => host.setDraft({ text: "a", mentions: [], attachments: [] }));
+  expect(screen.getByTestId("late-tracking").textContent).toBe("not reading");
+  fireEvent.click(screen.getByText("read"));
+  expect(screen.getByTestId("late-tracking").textContent).toBe("a");
+  act(() => host.setDraft({ text: "ab", mentions: [], attachments: [] }));
+  expect(screen.getByTestId("late-tracking").textContent).toBe("ab");
 });

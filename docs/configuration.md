@@ -17,6 +17,15 @@ npx bb-app config unset BB_APP_URL
 npx bb-app config refresh
 ```
 
+BB accepts request hosts that are `localhost`, IP addresses (including LAN and
+Tailscale IPs), or the hostname in `BB_APP_URL`. For a custom DNS name or reverse
+proxy, set `npx bb-app config set BB_APP_URL https://bb.example.com` before
+connecting, including from the CLI or SDK. A matching `Host` and `Origin`, or
+`X-Forwarded-Host`, cannot authorize an unconfigured DNS name. A proxy can
+preserve the configured host or forward to localhost. BB Connect rewrites
+requests to the local server address and needs no additional configuration.
+`BB_SERVER_BIND_HOST=0.0.0.0` remains supported for direct remote access.
+
 Use `bb-app env` for provider credentials and provider-specific environment:
 
 ```bash
@@ -32,6 +41,18 @@ Commit `.bb-env-teardown.sh` when bb must release external resources before it
 removes that worktree. See [Worktrees, setup scripts, and teardown
 scripts](worktrees.md) for the lifecycle, environment, timeout, and failure
 contracts.
+
+## Linux machine installer
+
+The machine installer normally installs a persistent systemd user service. If
+the current user's bus is unavailable, it retries using the runtime path from
+`loginctl`. On a systemd host it then fails before enrolling if the bus still
+cannot be reached. In containers and on machines without systemd as init, it
+runs a detached daemon instead. Set
+`BB_INSTALL_SKIP_SERVICE=1` on the installer command only when running without
+a service is intentional. No service starts the daemon after a reboot. The
+temporary daemon used for a first join is not supervised; a previously joined
+daemon started by the installer is supervised while its launcher runs.
 
 `bb-app config list` shows non-secret values. `bb-app env list` redacts every
 value and only shows whether a key is set.
@@ -222,10 +243,13 @@ bb settings ai-services test thread-title
 Each task is `automatic` (the default), `off`, or a service id. A service is
 identified by its plugin and its id, so two plugins may register the same id;
 pass `--plugin <plugin-id>` to `set` when they do. Automatic tries
-the services bb ships in order: Codex (`codex`, using the Codex CLI login on the
-primary machine), then bb cloud (`bb`, the `bb-ai` plugin, for a signed-in bb
-account). bb cloud is on by default once you sign in; `bb ai off` turns it off
-(it then sends nothing to getbb.app) and `bb ai on` turns it back on. Automatic never sends text to a third-party plugin. A service you pick
+bb cloud (`bb`, the `bb-ai` plugin, for a signed-in bb account) first,
+then all other registered services in lexicographic order of plugin id and
+service id, including third-party plugins. Only services supporting the task
+participate; unavailable services and failed requests fall through to the next.
+Codex (`codex`, the `provider-codex` plugin) uses the Codex CLI login on the
+primary machine. bb cloud is on by default once you sign in; `bb ai off` turns it off
+(it then sends nothing to getbb.app) and `bb ai on` turns it back on. A service you pick
 is used alone; if it fails, titles fall back to the start of the prompt and
 commits to `bb: automated commit`. Each plugin picks its own model.
 
@@ -313,6 +337,14 @@ it with
 `bb settings general steerActiveThreadOnEnter <true|false>`, where `true` is
 "Steer".
 
+The "Thread archive confirmation" switch in Settings → General defaults to on.
+Turn it off to archive a thread and its child threads immediately without a
+confirmation popup. The archive toast still offers Undo. This server-wide
+preference applies to all connected app clients. Set it with
+`bb settings general confirmThreadArchive false` or
+`bb.sdk.system.updateGeneralSettings` using `confirmThreadArchive`.
+CLI and SDK archive operations remain non-interactive.
+
 The "Streamer mode" toggle in Settings → General hides every `customModels`
 entry from `~/.bb/config.json` in all model lists: the web and mobile pickers,
 `bb provider models`, and `sdk.providers.models`. Turn it on before a screen
@@ -325,13 +357,14 @@ and falls back to the provider default; the next send records that default, so
 select the custom model again after you turn streamer mode off. Set it with
 `bb settings general streamerMode <true|false>`.
 
-The "Allow fast service tier" switch in Settings → Providers defaults to on.
+The "Allow faster service tiers" switch in Settings → Providers defaults to on.
 Turn it off with `bb settings general allowFastServiceTier false` or
 `bb.sdk.system.updateGeneralSettings`. While off, new turns use the default
-service tier, including explicit fast requests, automations, and previously
-queued messages. The app hides Fast mode. Turn the setting on to choose fast
-again; completed turns and project defaults saved while it was off retain the
-default tier.
+service tier, including explicit requests for another tier (`fast`, Codex
+`ultrafast`, or any other tier a provider lists), automations, and previously
+queued messages. The app hides the service tier control. Turn the setting on to
+choose a faster tier again; completed turns and project defaults saved while it
+was off retain the default tier.
 
 The "New branch prefix" field in Settings → General sets the text bb
 puts in front of every branch name it creates for a managed worktree or a new
@@ -387,6 +420,13 @@ tools on for bb threads with
 Claude Code with `--chrome`. The host needs the Claude in Chrome extension and a
 claude.ai login; API-key sessions keep Chrome off. A change restarts the thread's
 Claude process before its next turn and keeps the conversation.
+
+In Accept Edits and Approve for me modes, bb runs Claude Code's Bash commands in
+Claude Code's sandbox. Turn it off with
+`bb plugin config provider-claude-code set sandboxEnabled false`. Bash commands
+then go through Claude Code's normal approvals and your own Claude Code
+permission and sandbox settings. A change restarts the thread's Claude process
+before its next turn and keeps the conversation.
 
 Outside an open typeahead menu, Shift+Enter inserts a newline. On
 coarse-pointer touch devices, the software-keyboard Return path inserts a
@@ -445,6 +485,9 @@ On the selected New tab page, `panel.previousNewTabItem` /
 move through search, enabled actions, and recent items in displayed order.
 Search results replace actions and recents while searching. Enter activates
 the focused item.
+The initially unassigned `panel.fullScreen.toggle` command runs the right
+panel's Full Screen / Exit Full Screen control while the panel is open. In a
+split right panel it maximizes the focused group.
 Chat splits use `pane.focus.left` / `right` / `up` / `down` with
 `Command+Control+Shift+ArrowLeft` / `ArrowRight` / `ArrowUp` / `ArrowDown` on macOS. These move
 spatially to the adjacent chat pane, including stacked splits, and stop at the
@@ -559,6 +602,43 @@ uses this mapping to launch remote-capable editors and terminals over SSH.
 Browsers or devices without a helper can still use bb; local editor actions are
 simply unavailable.
 
+## Provider availability
+
+Settings → Providers lists disabled providers below enabled providers in the same
+list. Only enabled providers can be reordered. Each row’s three-dot menu enables
+or disables the provider, or makes an enabled provider the default. Enable
+restores a provider and, if needed, its supplying plugin.
+Disabling an individual provider leaves its plugin, sibling providers, installed
+CLI, and existing threads intact. In-flight turns can finish; new turns and
+sessions are rejected until the provider is enabled again. Queued messages and
+automations are subject to the same server-side check.
+
+```bash
+bb provider list --all
+bb provider disable acp-opencode
+bb provider enable claude-code
+```
+
+`bb provider list` and thread pickers omit disabled providers. `list --all`
+shows the global management catalog, including providers whose plugins are off;
+it cannot be combined with machine or environment selectors. Enabling a shared
+plugin preserves individual provider opt-outs. Disabling the selected default
+clears that choice, allowing the next enabled provider in saved order to be used.
+A project whose last-used provider is disabled also falls back to that order;
+explicitly requesting a disabled provider is still rejected.
+
+The core `disabledProviderIds` value lists disabled providers by ID. It is stored
+apart from Settings → General, so only the provider enable/disable route, CLI and
+SDK change it; a general-settings save, even from a stale client, cannot. Enable
+removes the ID, so the provider returns to its automatic discovery behavior:
+agents such as `acp-opencode` again appear only where their CLI is installed.
+Uninstalling a plugin forgets the disabled state of its providers.
+
+The SDK exposes `sdk.providers.catalog()` and
+`sdk.providers.setEnabled({ providerId: "acp-opencode", enabled: false })`.
+Install provider plugins in Settings → Plugins. Configure custom ACP agents in
+the ACP providers plugin settings.
+
 ## Custom ACP Agents
 
 Known ACP agents appear when their CLI is installed on the host. bb exposes
@@ -603,17 +683,11 @@ setting changes, with no restart and no `config refresh`.
 A configured agent's command is local code execution and only works with a
 co-located daemon.
 
-### The deprecated `customAcpAgents` config array
-
-Before ACP agents were plugin-owned, custom agents lived in `customAcpAgents`
-in `~/.bb/config.json`. bb still **reads** that array so an existing agent keeps
-working, logs a deprecation warning for each one, and never writes to it.
-Support ends in 0.41 — move each entry into the `customAgents` setting above.
-The two shapes are identical except that the setting has no `logo` field: a
-plugin-registered provider's icon is a host glyph or an asset the plugin ships,
-so a configured agent shows the generic tool glyph, and bb drops the field when
-it reads the old array. A setting entry wins over a config entry with the same
-`id`.
+BB launches OpenCode sessions with `OPENCODE_CLIENT=acp` and
+`OPENCODE_ENABLE_QUESTION_TOOL=false`, overriding inherited and custom launch
+values. Native questions have no ACP interaction handler in BB; agents use the
+ask-user-question plugin’s `AskUserQuestion` tool instead. This also applies to
+custom agents with `dialect: "opencode"` and does not change OpenCode config files.
 
 ## OpenCode Go Usage
 
@@ -929,7 +1003,10 @@ value. A change on one device reaches every other connected window through the
 `ui-preferences-changed` broadcast without a reload.
 
 Sidebar width and open state stay in the browser because they depend on the
-window size.
+window size, and each browser tab or desktop window keeps its own. Collapsing or
+resizing the sidebar in one tab leaves every other open tab alone; a newly
+opened tab or window starts from the most recent choice made anywhere in this
+browser.
 
 ### Thread-list visibility
 
@@ -1255,24 +1332,13 @@ while keeping workspace changes.
 
 Experimental surfaces are changed in Settings → Experiments or with
 `bb settings experiment <key> <true|false>`. All experiments start off.
+bb stores only the experiments you set; the others follow the shipped default.
 The default-off `changelogPreview` experiment shows the latest release notes
 as a compact, dismissible card on Settings → Updates.
-The default-off `legacyJitiPluginLoader` experiment restores the previous JITI
-plugin server loader. Toggling it leaves running plugin instances unchanged;
-the selected loader applies on the next install, reload, enable, update, or
-server restart. Set it with `bb settings experiment legacyJitiPluginLoader
-<true|false>`.
 
 BB releases restorable provider sessions after 30 idle minutes. The daemon
 checks for these sessions every five minutes. Active turns, commands, agents,
 workflows, and monitors keep their sessions loaded.
-
-The `sidebarProgressiveDisclosure` experiment is off by default. In **By
-project** and **By machine**, it shows the first five groups in the current sort
-order, keeps attention groups visible, and reveals ten more per **Show more**
-click. Revealed groups stay visible through activity and sort-order changes.
-**Manually** is unchanged. Toggle it with `bb settings experiment
-sidebarProgressiveDisclosure <true|false>`.
 
 Long timelines and large expanded timeline details retain stable
 height-preserving wrappers while mounting only rows near their active
@@ -1686,7 +1752,7 @@ The Browser Automation plugin supports desktop attachment and headless Chrome on
 
 On each selected browser host, the plugin's host worker installs that release automatically on first use under `<plugin host dataDir>/runtime/npm/`, using the host's `npm` with scripts disabled, verifying the registry signature and SLSA provenance, downloading the matching GitHub release binary, and checking its digest before launch. Later sessions reuse the verified install without network access. Headless mode discovers installed Chrome/Chromium or uses `<plugin host dataDir>/runtime/chrome`. These files belong to the plugin host storage directory; they are not paths on the server or invoking agent host, and the user's global npm installation is never modified. No runtime sandbox-disabling setting is provided.
 
-For isolated development smoke tests only, `DEV_BROWSER_SMOKE_BINARY` selects the absolute binary path for the runtime smoke, `DEV_BROWSER_SMOKE_CHROME` selects the absolute Chrome path, and `DEV_BROWSER_SMOKE_NO_SANDBOX=1` enables the fixture's no-sandbox wrapper where the test host requires it. The `smoke:install` task performs a real install of the pinned release into a disposable directory. These variables do not change normal plugin runtime behavior.
+For isolated development smoke tests only, `DEV_BROWSER_SMOKE_BINARY` selects the absolute binary path for the runtime smoke and `DEV_BROWSER_SMOKE_CHROME` selects the absolute Chrome path. The `smoke:install` task performs a real install of the pinned release into a disposable directory. These variables do not change normal plugin runtime behavior.
 
 ## Agent guidance plugin settings
 

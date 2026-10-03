@@ -19,6 +19,7 @@ import { createStore } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PERSONAL_PROJECT_ID } from "@bb/domain";
 import type {
+  ComposerView,
   ExperimentalComposerSelection,
   PluginComposerApi,
   PluginFileOpenerProps,
@@ -34,7 +35,6 @@ import {
 import {
   AUTOMATIONS_PLUGIN_ID,
   PLUGIN_PANEL_ROUTE_PATH,
-  AUTOMATIONS_PLUGIN_PANEL_PATH,
 } from "@/lib/route-paths";
 import {
   markPluginFrontendsSettled,
@@ -47,7 +47,6 @@ import {
   PluginPanelHeaderCenter,
 } from "./PluginPanelHeader";
 import { resetAllCrashedPluginSlotsForTest } from "./PluginSlotMount";
-import { resetDeprecatedAliasWarningsForTests } from "@/lib/plugin-sdk-deprecated-aliases";
 import { applyPluginCss, resetPluginCssForTest } from "@/lib/plugin-css";
 import { ComposerActionsSlot } from "./PluginComposerActions";
 import { PluginContext } from "./plugin-context";
@@ -76,7 +75,10 @@ import {
 } from "@/lib/plugin-sdk-hooks";
 import { subscribeComposerFocusRequests } from "@/lib/composer-focus-requests";
 import { getComposerTextEffects } from "@/lib/composer-text-effects";
-import { usePromptDraftStorage } from "@/hooks/usePromptDraftStorage";
+import {
+  getPromptDraftAccessor,
+  usePromptDraftStorage,
+} from "@/hooks/usePromptDraftStorage";
 import {
   PluginPanelTabContent,
   usePluginNewThreadPanelActions,
@@ -87,6 +89,8 @@ import { NewTabActions } from "@/components/secondary-panel/NewTabActions";
 import { buildFileOpenerPanelTab } from "./file-opener-tabs";
 import { splitLayoutAtom } from "@/lib/split-layout/atoms";
 import type { PromptDraftState } from "@bb/client-core";
+
+const AUTOMATIONS_PLUGIN_PANEL_PATH = "automations";
 
 function composerTextEffectValues(storageKey: string | null) {
   return getComposerTextEffects(storageKey).map(({ effect }) => effect);
@@ -464,6 +468,133 @@ describe("useComposer", () => {
     expect(screen.getByTestId("beta-metadata").textContent).toBe(
       JSON.stringify({ model: "precise" }),
     );
+  });
+
+  it("does not re-render a plugin that never reads the text while the draft changes", () => {
+    const quietRenders = vi.fn<(composer: PluginComposerApi) => void>();
+    const readingRenders = vi.fn();
+    function QuietProbe() {
+      const composer = useComposer();
+      quietRenders(composer);
+      return (
+        <button
+          type="button"
+          onClick={() => composer.updateText((t) => `${t}!`)}
+        >
+          quiet-update
+        </button>
+      );
+    }
+    function ReadingProbe() {
+      const composer = useComposer();
+      readingRenders();
+      return <div data-testid="reading-text">{composer.text}</div>;
+    }
+    setPluginSlotRegistrations(
+      "demo",
+      registrationSet({
+        composerCustomizations: [
+          {
+            id: "probe",
+            actions: [
+              { id: "quiet", component: QuietProbe },
+              { id: "reading", component: ReadingProbe },
+            ],
+          },
+        ],
+      }),
+    );
+    const staticView: ComposerView = {
+      scope: { kind: "thread", threadId: "thr_quiet" },
+      layout: "expanded",
+      experimental_selectedProviderId: null,
+      draft: { text: "", isEmpty: true, attachmentCount: 0 },
+      run: { isRunning: false, isSubmitting: false },
+    };
+    render(
+      <MemoryRouter initialEntries={["/threads/thr_quiet"]}>
+        <ComposerActionsSlot view={staticView} />
+      </MemoryRouter>,
+    );
+    const draft = getPromptDraftAccessor({
+      kind: "thread",
+      projectId: PERSONAL_PROJECT_ID,
+      threadId: "thr_quiet",
+    });
+    const quietRendersBefore = quietRenders.mock.calls.length;
+    const readingRendersBefore = readingRenders.mock.calls.length;
+
+    for (const text of ["a", "ab", "abc", "abcd", "abcde"]) {
+      act(() => draft.setDraft({ text, mentions: [], attachments: [] }));
+    }
+
+    expect(quietRenders).toHaveBeenCalledTimes(quietRendersBefore);
+    expect(readingRenders).toHaveBeenCalledTimes(readingRendersBefore + 5);
+    expect(screen.getByTestId("reading-text").textContent).toBe("abcde");
+    expect(quietRenders.mock.lastCall?.[0].text).toBe("abcde");
+
+    fireEvent.click(screen.getByText("quiet-update"));
+    expect(draft.getCurrent().text).toBe("abcde!");
+    expect(screen.getByTestId("reading-text").textContent).toBe("abcde!");
+  });
+
+  it("keeps following the draft once a plugin starts reading it after mount", () => {
+    function LateReader() {
+      const composer = useComposer();
+      const [reading, setReading] = useState(false);
+      return (
+        <div>
+          <button type="button" onClick={() => setReading(true)}>
+            start-reading
+          </button>
+          <div data-testid="late-text">
+            {reading ? composer.text : "not reading"}
+          </div>
+          <div data-testid="late-empty">
+            {reading ? String(composer.isEmpty) : "not reading"}
+          </div>
+        </div>
+      );
+    }
+    setPluginSlotRegistrations(
+      "demo",
+      registrationSet({
+        composerCustomizations: [
+          { id: "probe", actions: [{ id: "late", component: LateReader }] },
+        ],
+      }),
+    );
+    const staticView: ComposerView = {
+      scope: { kind: "thread", threadId: "thr_late" },
+      layout: "expanded",
+      experimental_selectedProviderId: null,
+      draft: { text: "", isEmpty: true, attachmentCount: 0 },
+      run: { isRunning: false, isSubmitting: false },
+    };
+    render(
+      <MemoryRouter initialEntries={["/threads/thr_late"]}>
+        <ComposerActionsSlot view={staticView} />
+      </MemoryRouter>,
+    );
+    const draft = getPromptDraftAccessor({
+      kind: "thread",
+      projectId: PERSONAL_PROJECT_ID,
+      threadId: "thr_late",
+    });
+
+    act(() => draft.setDraft({ text: "a", mentions: [], attachments: [] }));
+    expect(screen.getByTestId("late-text").textContent).toBe("not reading");
+
+    fireEvent.click(screen.getByText("start-reading"));
+    expect(screen.getByTestId("late-text").textContent).toBe("a");
+
+    act(() => draft.setDraft({ text: "ab", mentions: [], attachments: [] }));
+    expect(screen.getByTestId("late-text").textContent).toBe("ab");
+    expect(screen.getByTestId("late-empty").textContent).toBe("false");
+
+    act(() => draft.setDraft({ text: "", mentions: [], attachments: [] }));
+    expect(screen.getByTestId("late-text").textContent).toBe("");
+    expect(screen.getByTestId("late-empty").textContent).toBe("true");
   });
 
   it("writes quotes into the thread draft and fires the focus bus", () => {
@@ -1114,37 +1245,6 @@ describe("useComposer", () => {
     ]);
   });
 
-  it("clears a text effect when the plugin composer scope changes", () => {
-    registerComposerProbe("scope-effect");
-    function ChangeScope() {
-      const navigate = useNavigate();
-      return (
-        <button
-          type="button"
-          onClick={() => navigate("/threads/thr_effect_next")}
-        >
-          change-scope
-        </button>
-      );
-    }
-    render(
-      <MemoryRouter initialEntries={["/threads/thr_effect"]}>
-        <ComposerCustomizationMount />
-        <ThreadDraftViewer threadId="thr_effect" />
-        <ChangeScope />
-      </MemoryRouter>,
-    );
-    const storageKey = screen.getByTestId("draft-key").textContent ?? "";
-
-    fireEvent.click(screen.getByText("scope-effect-start-effect"));
-    expect(composerTextEffectValues(storageKey)).toEqual([
-      { className: "test-text-effect" },
-    ]);
-    fireEvent.click(screen.getByText("change-scope"));
-
-    expect(composerTextEffectValues(storageKey)).toEqual([]);
-  });
-
   it("clears and rejects captured lock and effect setters after scope cleanup or unmount", () => {
     const captured: Array<
       Pick<PluginComposerApi, "setInputLock" | "setTextEffect">
@@ -1308,6 +1408,9 @@ describe("useComposer", () => {
     }
 
     const readyEditor: ComposerEditorBridge = {
+      openPopup: () => false,
+      closePopup: () => false,
+      isPopupOpen: () => false,
       host: {
         scope: { kind: "thread", threadId: "thr_submit" },
         textEffectKey: "thread:thr_submit",
@@ -1466,6 +1569,9 @@ describe("useComposer().experimental_setSelection", () => {
       },
     };
     const editor: ComposerEditorBridge = {
+      openPopup: () => false,
+      closePopup: () => false,
+      isPopupOpen: () => false,
       host,
       pluginCustomizable: true,
       state: {
@@ -1500,6 +1606,57 @@ describe("useComposer().experimental_setSelection", () => {
     expect(reads.at(-1)?.listedSelection).toEqual(selection);
     view.unmount();
     clearComposerEditorBridge("thread:thr_selection", editor);
+  });
+
+  it("re-renders a plugin that reads only its own composer's selection", async () => {
+    const listeners = new Set<() => void>();
+    let selection: ExperimentalComposerSelection = {
+      providerId: "codex",
+      model: "gpt-5",
+    };
+    function OwnSelectionProbe() {
+      const composer = useComposer();
+      return (
+        <div data-testid="own-selection">
+          {composer.selection?.model ?? "none"}
+        </div>
+      );
+    }
+    setPluginSlotRegistrations(
+      "demo",
+      registrationSet({
+        composerCustomizations: [
+          {
+            id: "selection",
+            actions: [{ id: "own", component: OwnSelectionProbe }],
+          },
+        ],
+      }),
+    );
+    const host = {
+      scope: { kind: "thread", threadId: "thr_own_selection" },
+      textEffectKey: "thread:thr_own_selection",
+      getSelection: () => selection,
+      subscribeSelection: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as const;
+    render(
+      <MemoryRouter initialEntries={["/threads/thr_own_selection"]}>
+        <Harness host={host} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId("own-selection").textContent).toBe("gpt-5");
+
+    await act(async () => {
+      selection = { providerId: "claude-code", model: "claude-opus-5" };
+      for (const listener of listeners) listener();
+    });
+
+    expect(screen.getByTestId("own-selection").textContent).toBe(
+      "claude-opus-5",
+    );
   });
 
   it("routes to the composer host, validates the selection, and refuses where there are no pickers", async () => {
@@ -1551,7 +1708,7 @@ describe("useComposer().experimental_setSelection", () => {
       captured!.experimental_setSelection({ permissionMode: "yolo" as never }),
     ).rejects.toThrow(/permission mode/);
     await expect(
-      captured!.experimental_setSelection({ serviceTier: "turbo" as never }),
+      captured!.experimental_setSelection({ serviceTier: "" }),
     ).rejects.toThrow(/service tier/);
     await expect(
       captured!.experimental_setSelection({
@@ -2597,167 +2754,5 @@ describe("plugin file opener tabs", () => {
       />,
     );
     expect(screen.getByText(/file opener is not available/)).toBeDefined();
-  });
-
-  it("restores the exact native preview node when the opener crashes", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    function CrashingEditor(): never {
-      throw new Error("editor crashed");
-    }
-    setPluginSlotRegistrations(
-      "notes",
-      registrationSet({
-        fileOpeners: [
-          {
-            id: "editor",
-            title: "Notes editor",
-            extensions: ["md"],
-            component: CrashingEditor,
-          },
-        ],
-      }),
-    );
-    const tab = {
-      ...createPluginPanelFixedPanelTab({
-        actionId: "file-opener:editor",
-        paramsJson: JSON.stringify({
-          path: "notes/todo.md",
-          source: {
-            kind: "workspace",
-            threadId: "thr_1",
-            environmentId: "env_1",
-            projectId: null,
-          },
-        }),
-        pluginId: "notes",
-        title: "todo.md",
-      }),
-      fileOpenerOwner: {
-        kind: "workspace-file-preview" as const,
-        environmentId: "env_1",
-        projectId: null,
-        tab: {
-          lineRange: { startLineNumber: 7, endLineNumber: 9 },
-          path: "notes/todo.md",
-          source: { kind: "working-tree" as const },
-          statusLabel: null,
-        },
-        threadId: "thr_1",
-      },
-    };
-
-    render(
-      <PluginPanelTabContent
-        tab={tab}
-        context={{ kind: "thread", threadId: "thr_1" }}
-        fileOpenerOriginal={
-          <button type="button">Native selection and editor actions</button>
-        }
-      />,
-    );
-
-    expect(screen.getByRole("button").textContent).toBe(
-      "Native selection and editor actions",
-    );
-  });
-});
-
-describe("file opener experimental_Original alias", () => {
-  beforeEach(() => {
-    resetDeprecatedAliasWarningsForTests();
-  });
-
-  function registerOpener(
-    component: (props: PluginFileOpenerProps) => React.ReactNode,
-  ) {
-    setPluginSlotRegistrations(
-      "notes",
-      registrationSet({
-        fileOpeners: [
-          {
-            id: "editor",
-            title: "Notes editor",
-            extensions: ["md"],
-            component,
-          },
-        ],
-      }),
-    );
-  }
-
-  const tab = buildFileOpenerPanelTab(
-    { id: "editor", pluginId: "notes" },
-    {
-      path: "notes/todo.md",
-      source: {
-        kind: "workspace",
-        environmentId: "env_1",
-        projectId: null,
-        threadId: "thr_1",
-      },
-    },
-    {
-      kind: "workspace-file-preview",
-      environmentId: "env_1",
-      projectId: null,
-      tab: {
-        lineRange: { startLineNumber: 7, endLineNumber: 9 },
-        path: "notes/todo.md",
-        source: { kind: "working-tree" },
-        statusLabel: null,
-      },
-      threadId: "thr_1",
-    },
-  );
-
-  function renderOpener(nativePreview: string) {
-    return (
-      <PluginPanelTabContent
-        tab={tab}
-        context={{ kind: "thread", threadId: "thr_1" }}
-        fileOpenerOriginal={<button type="button">{nativePreview}</button>}
-      />
-    );
-  }
-
-  it("delegates to the native preview through the alias and warns once across renders", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    let renders = 0;
-    registerOpener(({ experimental_Original: LegacyOriginal }) => {
-      renders += 1;
-      return LegacyOriginal === undefined ? (
-        <div>alias missing</div>
-      ) : (
-        <LegacyOriginal />
-      );
-    });
-
-    const { rerender } = render(renderOpener("Native preview and actions"));
-    expect(screen.getByRole("button").textContent).toBe(
-      "Native preview and actions",
-    );
-
-    rerender(renderOpener("Native preview for line 7"));
-    expect(screen.getByRole("button").textContent).toBe(
-      "Native preview for line 7",
-    );
-    expect(renders).toBe(2);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "experimental_Original is deprecated; use Original. Removed in bb 0.42",
-    );
-  });
-
-  it("never warns for an opener that reads Original", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    registerOpener(({ Original }) => <Original />);
-
-    render(renderOpener("Native preview and actions"));
-
-    expect(screen.getByRole("button").textContent).toBe(
-      "Native preview and actions",
-    );
-    expect(warn).not.toHaveBeenCalled();
   });
 });

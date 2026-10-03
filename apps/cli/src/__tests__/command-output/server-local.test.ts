@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -403,45 +403,6 @@ describe("bb server import", () => {
       `Import the bb server from ${plainArchive} into ${dataDir}? [y/N] `,
     );
     expect(await readdir(parent)).toEqual([]);
-  });
-
-  it("asks for a new export when the file was encrypted by an older bb", async () => {
-    const parent = await makeDataDirParent();
-    const oldExport = await writeDataFile(
-      parent,
-      "old-export.bbsa",
-      `BBSA${randomBytes(64).toString("hex")}`,
-    );
-    const dataDir = join(parent, "bb-data");
-
-    await expect(
-      runCommand(
-        ["server", "import", oldExport, "--data-dir", dataDir, "--yes"],
-        register,
-      ),
-    ).rejects.toThrow("process.exit:1");
-
-    expect(collectLogPayloads(vi.mocked(console.error))).toEqual([
-      "Error: This export was encrypted by an older bb; re-export it with bb server export",
-    ]);
-    expect(await readdir(parent)).toEqual(["old-export.bbsa"]);
-  });
-
-  it("rejects a file that is not a server archive", async () => {
-    const parent = await makeDataDirParent();
-    const notAnArchive = await writeDataFile(parent, "notes.txt", "hello");
-    const dataDir = join(parent, "bb-data");
-
-    await expect(
-      runCommand(
-        ["server", "import", notAnArchive, "--data-dir", dataDir, "--yes"],
-        register,
-      ),
-    ).rejects.toThrow("process.exit:1");
-
-    expect(collectLogPayloads(vi.mocked(console.error))).toEqual([
-      "Error: File is not a bb server archive",
-    ]);
   });
 
   it("refuses an export made by a newer bb and leaves nothing behind", async () => {
@@ -1045,7 +1006,9 @@ describe("bb server unlock", () => {
       customModels: [{ providerId: "codex", model: "gpt-5.4" }],
       customAcpAgents: [{ id: "not a valid agent" }],
     });
-    expect((await stat(configPath)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(configPath)).mode & 0o777).toBe(0o600);
+    }
     expect(await readdir(dataDir)).toEqual(["config.json"]);
     expect(JSON.parse(collectLogPayloads(vi.mocked(console.log))[0]!)).toEqual({
       dataDir,

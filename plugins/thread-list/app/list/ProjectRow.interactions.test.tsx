@@ -48,6 +48,7 @@ const { ThreadCreationPlacementScope } =
 const { useSidebarModeSectionOrder } =
   await import("./useSidebarModeSectionOrder.js");
 const { SidebarHeaderControls } = await import("./SidebarHeaderControls.js");
+const { SidebarDraftPresenceSync } = await import("./sidebarDraftPresence.js");
 const { ThreadListVisibilityMenuItems } =
   await import("./ThreadListVisibility.js");
 
@@ -97,6 +98,7 @@ interface HarnessProps {
 function Harness({ children, store }: HarnessProps) {
   return (
     <TooltipProvider>
+      <SidebarDraftPresenceSync />
       <Provider store={store}>{children}</Provider>
     </TooltipProvider>
   );
@@ -156,7 +158,6 @@ function renderPinnedParentWithChild({
       isEnvGrouped={false}
       collapsedThreadIds={isCollapsed ? new Set(["thr_parent"]) : new Set()}
       collapsedEnvironmentIds={new Set()}
-      variant="section"
       onToggleThreadCollapsed={vi.fn()}
       onToggleEnvironmentCollapsed={vi.fn()}
       sectionDnd={sectionDnd}

@@ -13,7 +13,7 @@ import {
 import { mutateManagedJsonFile } from "@bb/config/managed-json-file";
 import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -48,7 +48,6 @@ import {
   bbAppManagedEnvFileSchema,
   formatBbAppConfigPath,
   formatBbAppEnvPath,
-  formatCustomAcpAgentProviderId,
   parseBbAppManagedConfig,
   REMOVED_AI_SERVICE_CONFIG_KEYS,
   REMOVED_AI_SERVICE_CONFIG_MESSAGE,
@@ -236,11 +235,7 @@ type ManagedConfigValues = BbAppManagedConfigValues;
 type ManagedEnvConfig = BbAppManagedEnvConfig;
 type ManagedEnvFile = BbAppManagedEnvFile;
 type ManagedConfig = BbAppManagedConfig;
-type ManagedConfigForWrite = Omit<
-  ManagedConfig,
-  "customAcpAgents" | "customModels"
-> & {
-  customAcpAgents?: unknown[];
+type ManagedConfigForWrite = Omit<ManagedConfig, "customModels"> & {
   customModels?: unknown[];
 };
 
@@ -1115,9 +1110,6 @@ function readManagedConfigForWrite(
         return parsedConfig;
       }
       const configForWrite: ManagedConfigForWrite = { ...parsedConfig };
-      if (Array.isArray(parsedJson.customAcpAgents)) {
-        configForWrite.customAcpAgents = parsedJson.customAcpAgents;
-      }
       if (Array.isArray(parsedJson.customModels)) {
         configForWrite.customModels = parsedJson.customModels;
       }
@@ -1192,9 +1184,6 @@ function mergeManagedConfig(
   if (patchConfig.customModels !== undefined) {
     nextConfig.customModels = patchConfig.customModels;
   }
-  if (patchConfig.customAcpAgents !== undefined) {
-    nextConfig.customAcpAgents = patchConfig.customAcpAgents;
-  }
 
   return nextConfig;
 }
@@ -1206,8 +1195,6 @@ function pruneManagedConfig(
   if (nextConfig.config && Object.keys(nextConfig.config).length === 0)
     delete nextConfig.config;
   if (nextConfig.customModels?.length === 0) delete nextConfig.customModels;
-  if (nextConfig.customAcpAgents?.length === 0)
-    delete nextConfig.customAcpAgents;
   return nextConfig;
 }
 
@@ -1684,11 +1671,6 @@ function formatManagedConfig(config: ManagedConfig): string {
   for (const [index, customModel] of (config.customModels ?? []).entries()) {
     lines.push(
       `customModels[${index}]=${customModel.providerId}:${customModel.model}`,
-    );
-  }
-  for (const [index, customAgent] of (config.customAcpAgents ?? []).entries()) {
-    lines.push(
-      `customAcpAgents[${index}]=${formatCustomAcpAgentProviderId(customAgent.id)}:${customAgent.command}`,
     );
   }
   return lines.length > 0 ? `${lines.join("\n")}\n` : "No bb-app config set.\n";
@@ -2656,12 +2638,34 @@ export async function createHostDaemonJoinEnv(
   };
 }
 
+interface ResolveBundledCliLaunchArgs {
+  args: string[];
+  cliPath: string;
+  nodePath: string;
+  platform: NodeJS.Platform;
+}
+
+export function resolveBundledCliLaunch(args: ResolveBundledCliLaunchArgs): {
+  command: string;
+  args: string[];
+} {
+  return args.platform === "win32" && win32.extname(args.cliPath) === ""
+    ? { command: args.nodePath, args: [args.cliPath, ...args.args] }
+    : { command: args.cliPath, args: args.args };
+}
+
 export async function runBundledCliCommand(
   args: RunBundledCliCommandArgs,
 ): Promise<number> {
   const bbCliOverride = toOptionalString(args.env.BB_CLI);
   const cliPath = bbCliOverride ?? join(args.context.daemonBundleDir, "bb");
-  const childProcess = spawn(cliPath, args.args, {
+  const launch = resolveBundledCliLaunch({
+    args: args.args,
+    cliPath,
+    nodePath: process.execPath,
+    platform: process.platform,
+  });
+  const childProcess = spawn(launch.command, launch.args, {
     cwd: process.cwd(),
     env: createCliEnv({ context: args.context, env: args.env }),
     stdio: "inherit",

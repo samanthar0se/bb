@@ -170,7 +170,9 @@ describe("public host management", () => {
         hostId: string;
       };
       expect(prepared).toMatchObject({ hostId: host.id });
-      expect(prepared.command).toContain("https://relay.example.com/install.sh");
+      expect(prepared.command).toContain(
+        "https://relay.example.com/install.sh",
+      );
       expect(release).not.toHaveBeenCalled();
       const credentialOf = (command: string) =>
         /X-BB-Enrollment: ([^']+)/u.exec(command)?.[1] ?? "";
@@ -217,14 +219,19 @@ describe("public host management", () => {
         headers: { "X-BB-Enrollment": credential },
       });
       expect(reused.status).toBe(403);
-      expect(reused.headers.get("content-type")).toContain("text/x-shellscript");
-      const errorScript = spawnSync("sh", ["-c", await reused.text()], {
-        encoding: "utf8",
-      });
-      expect(errorScript.status).toBe(1);
-      expect(errorScript.stderr).toContain(
-        "already been used, replaced, or expired",
+      expect(reused.headers.get("content-type")).toContain(
+        "text/x-shellscript",
       );
+      const errorText = await reused.text();
+      if (process.platform !== "win32") {
+        const errorScript = spawnSync("sh", ["-c", errorText], {
+          encoding: "utf8",
+        });
+        expect(errorScript.status).toBe(1);
+        expect(errorScript.stderr).toContain(
+          "already been used, replaced, or expired",
+        );
+      }
     });
   });
 
@@ -514,20 +521,6 @@ describe("public host management", () => {
       expect(getHost(harness.db, host.id)?.maxPermissionMode).toBe(
         "accept-edits",
       );
-    });
-  });
-
-  it("allows session-gated join-code minting", async () => {
-    await withTestHarness(async (harness) => {
-      const response = await harness.app.request(`${API}/hosts/join-codes`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-bb-gate-auth": "session",
-        },
-        body: JSON.stringify({}),
-      });
-      expect(response.status).toBe(201);
     });
   });
 

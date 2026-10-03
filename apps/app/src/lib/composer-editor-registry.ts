@@ -14,6 +14,9 @@ export interface ComposerEditorBridge {
   pluginCustomizable: boolean;
   state: ComposerEditorState;
   insertAtCursor(value: ComposerEditorInsertValue, block: boolean): boolean;
+  openPopup(pluginId: string, popupId: string): boolean;
+  closePopup(pluginId: string): boolean;
+  isPopupOpen(): boolean;
 }
 
 const bridgesByKey = new Map<string, ComposerEditorBridge>();
@@ -80,19 +83,4 @@ export function useComposerEditorBridge(
   );
   const getSnapshot = useCallback(() => getComposerEditorBridge(key), [key]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-
-export function areComposerEditorStatesEqual(
-  left: ComposerEditorState,
-  right: ComposerEditorState,
-): boolean {
-  return (
-    left.layout === right.layout &&
-    left.isRunning === right.isRunning &&
-    left.isSubmitting === right.isSubmitting &&
-    left.isSubmittingBlocked === right.isSubmittingBlocked &&
-    left.submittingBlockedReason === right.submittingBlockedReason &&
-    left.isAttaching === right.isAttaching &&
-    left.attachmentError === right.attachmentError
-  );
 }
