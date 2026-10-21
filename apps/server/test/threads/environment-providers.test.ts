@@ -567,17 +567,34 @@ describe("machine and environment provider composition", () => {
         phase: "creating",
         statusMessage: "Booting cloud machine",
       });
-      expect(getPreparingEnvironment(harness.db, thread.id)?.hostId).toBe(
-        machineHost?.id,
-      );
-
-      release.resolve();
-      await expect
-        .poll(() => getPreparingEnvironment(harness.db, thread.id))
-        .toMatchObject({
+      const environment = getPreparingEnvironment(harness.db, thread.id);
+      expect(environment?.hostId).toBe(machineHost?.id);
+      if (environment === null)
+        throw new Error("Missing preparing environment");
+      const destroyed = createDeferredPromise<void>();
+      const socket = {
+        close() {},
+        send() {
+          if (
+            getEnvironment(harness.db, environment.id)?.status === "destroyed"
+          )
+            destroyed.resolve();
+        },
+      };
+      harness.hub.subscribe(socket, {
+        kind: "environment-detail",
+        environmentId: environment.id,
+      });
+      try {
+        release.resolve();
+        await destroyed.promise;
+        expect(getPreparingEnvironment(harness.db, thread.id)).toMatchObject({
           status: "destroyed",
           statusMessage: "Cloud quota exceeded",
         });
+      } finally {
+        harness.hub.unregisterClient(socket);
+      }
     });
   });
 });
@@ -1422,6 +1439,74 @@ describe("environment providers are asked inside provisioning", () => {
       });
     });
   });
+
+  it.each([
+    ["records a reported base", "origin/dev", "origin/dev"],
+    ["clears the base when the provider reports none", null, null],
+    ["keeps the base when the provider omits it", undefined, "origin/old"],
+  ] as const)(
+    "on a reused host row it %s",
+    async (_label, reported, expected) => {
+      await withTestHarness(async (harness) => {
+        const { host, project, session } = seedTargetFixture(
+          harness,
+          "host-target-reused-merge-base",
+        );
+        const path = "/tmp/environment-providers-reused-merge-base";
+        const attached = seedEnvironment(harness.deps, {
+          branchName: "main",
+          mergeBaseBranch: "origin/old",
+          environmentProviderId: PROVIDER_ID,
+          environmentProviderPluginId: PLUGIN_ID,
+          hostId: host.id,
+          path,
+          projectId: project.id,
+        });
+        registerTestHostRpcCapture(harness, {
+          hostId: host.id,
+          sessionId: session.id,
+          gitSourceInspectionResult: {
+            isWorktree: false,
+            checkout: {
+              kind: "branch",
+              branchName: "bb/next-thread",
+              headSha: "def456",
+            },
+            defaultBranch: "main",
+            defaultBranchRelation: "local-ahead",
+            hasUncommittedChanges: false,
+            operation: { kind: "none" },
+            originDefaultBranch: "origin/main",
+          },
+        });
+        installTarget({
+          provision: () => ({
+            action: "ready",
+            environment: {
+              type: "host",
+              hostId: host.id,
+              path,
+              ...(reported === undefined ? {} : { mergeBaseBranch: reported }),
+            },
+          }),
+        });
+        const created = await createTargetThread(harness, {
+          projectId: project.id,
+        });
+        await vi.waitFor(() => {
+          expect(getEnvironment(harness.db, attached.id)?.branchName).toBe(
+            "bb/next-thread",
+          );
+        });
+        expect(getThread(harness.db, created.id)?.environmentId).toBe(
+          attached.id,
+        );
+        expect(getEnvironment(harness.db, attached.id)?.mergeBaseBranch).toBe(
+          expected,
+        );
+      });
+    },
+  );
 
   it("fails the thread with the plugin named when provision throws", async () => {
     await withTestHarness(async (harness) => {
@@ -2778,6 +2863,7 @@ describe("a provider-produced environment over its life", () => {
         emitThreadEvents: () => {},
         emitTerminalInput: () => {},
         emitHostDeleted: () => {},
+        emitEnvironmentRemoved: () => {},
         emitThreadCreated: () => {},
         emitThreadActive: () => {},
         emitThreadIdle: () => {},
@@ -2786,6 +2872,7 @@ describe("a provider-produced environment over its life", () => {
         emitThreadUnarchived: (thread) => {
           unarchived.push(thread.id);
         },
+        emitThreadParentChanged: () => {},
         emitThreadDeleted: () => {},
         emitMessageQueued: () => {},
         emitMessageDispatched: () => {},

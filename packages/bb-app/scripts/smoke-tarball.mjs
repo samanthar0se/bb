@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -355,16 +356,28 @@ async function acceptHostDaemonStatusResponse(response, expectedServerUrl) {
   );
 }
 
+async function readHostDaemonLogs(logDir) {
+  let entries;
+  try {
+    entries = await readdir(logDir);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return "";
+  }
+  const contents = await Promise.all(
+    entries
+      .filter((name) => /^host-daemon\.\d+\.log$/u.test(name))
+      .map((name) => readFile(join(logDir, name), "utf8")),
+  );
+  return contents.join("");
+}
+
 async function waitForHostPluginWorker({ dataDir, pluginId, processRef }) {
-  const logPath = join(dataDir, "logs", "host-daemon-stdio.log");
+  const logDir = join(dataDir, "logs");
   let daemonOutput = "";
   const deadline = Date.now() + HOST_PLUGIN_WORKER_TIMEOUT_MS;
   while (Date.now() <= deadline) {
-    try {
-      daemonOutput = await readFile(logPath, "utf8");
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
+    daemonOutput = await readHostDaemonLogs(logDir);
     if (
       daemonOutput
         .split("\n")
@@ -381,13 +394,13 @@ async function waitForHostPluginWorker({ dataDir, pluginId, processRef }) {
       processRef.childProcess.signalCode !== null
     ) {
       throw new Error(
-        `${processRef.label} exited before host plugin ${pluginId} started\n${formatProcessOutput(processRef.output)}\n${logPath}:\n${daemonOutput}`,
+        `${processRef.label} exited before host plugin ${pluginId} started\n${formatProcessOutput(processRef.output)}\n${logDir}/host-daemon.N.log:\n${daemonOutput}`,
       );
     }
     await delay(HTTP_WAIT_INTERVAL_MS);
   }
   throw new Error(
-    `Timed out waiting for host plugin ${pluginId} on ${processRef.label}\n${formatProcessOutput(processRef.output)}\n${logPath}:\n${daemonOutput}`,
+    `Timed out waiting for host plugin ${pluginId} on ${processRef.label}\n${formatProcessOutput(processRef.output)}\n${logDir}/host-daemon.N.log:\n${daemonOutput}`,
   );
 }
 
@@ -1248,8 +1261,19 @@ async function smokeDaemonJoin(binDir) {
 try {
   const smokeStartedAt = performance.now();
   const tarballPath = await timed("npm pack", () => packTarball());
-  await timed("npx entrypoint", () => smokeNpxEntrypoint(tarballPath));
-  const sdkDir = await timed("sdk package", () => smokeSdkPackage(tarballPath));
+  let sdkDir;
+  if (process.platform === "win32") {
+    const [npxResult, sdkResult] = await Promise.allSettled([
+      timed("npx entrypoint", () => smokeNpxEntrypoint(tarballPath)),
+      timed("sdk package", () => smokeSdkPackage(tarballPath)),
+    ]);
+    if (npxResult.status === "rejected") throw npxResult.reason;
+    if (sdkResult.status === "rejected") throw sdkResult.reason;
+    sdkDir = sdkResult.value;
+  } else {
+    await timed("npx entrypoint", () => smokeNpxEntrypoint(tarballPath));
+    sdkDir = await timed("sdk package", () => smokeSdkPackage(tarballPath));
+  }
   const installedBinDir = join(sdkDir, "node_modules", ".bin");
   const installedPackageDir = join(sdkDir, "node_modules", "bb-app");
   await timed("help commands", () => smokeHelpCommands(installedBinDir));

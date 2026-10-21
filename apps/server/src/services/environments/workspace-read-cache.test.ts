@@ -195,17 +195,30 @@ describe("WorkspaceReadCaches", () => {
     };
   }
 
-  it("drops both caches for an environment on work-status-changed and git-refs-changed", async () => {
-    for (const change of ["work-status-changed", "git-refs-changed"] as const) {
+  it("refreshes local status on file edits and refreshes pull requests only on ref or lifecycle changes", async () => {
+    for (const { changes, expectedPullRequestLoads } of [
+      { changes: ["work-status-changed"], expectedPullRequestLoads: 1 },
+      { changes: ["git-refs-changed"], expectedPullRequestLoads: 2 },
+      { changes: ["status-changed"], expectedPullRequestLoads: 2 },
+      {
+        changes: ["work-status-changed", "git-refs-changed"],
+        expectedPullRequestLoads: 2,
+      },
+      {
+        changes: ["work-status-changed", "metadata-changed"],
+        expectedPullRequestLoads: 1,
+      },
+    ] as const) {
       const hub = createFakeHub();
-      const caches = new WorkspaceReadCaches({ hub, now: () => 0 });
+      const clock = createClock();
+      const caches = new WorkspaceReadCaches({ hub, now: clock.now });
       const primed = await primeBoth(caches);
 
       hub.emit({
         type: "changed",
         entity: "environment",
         id: "env-2",
-        changes: [change],
+        changes: [...changes],
       });
       expect(await primed.readBoth()).toEqual({ status: 1, pullRequest: 1 });
 
@@ -213,9 +226,18 @@ describe("WorkspaceReadCaches", () => {
         type: "changed",
         entity: "environment",
         id: "env-1",
-        changes: [change],
+        changes: [...changes],
       });
-      expect(await primed.readBoth()).toEqual({ status: 2, pullRequest: 2 });
+      expect(await primed.readBoth()).toEqual({
+        status: 2,
+        pullRequest: expectedPullRequestLoads,
+      });
+
+      clock.advance(10_000);
+      expect(await primed.readBoth()).toEqual({
+        status: 3,
+        pullRequest: expectedPullRequestLoads + 1,
+      });
     }
   });
 
@@ -228,7 +250,11 @@ describe("WorkspaceReadCaches", () => {
       type: "changed",
       entity: "environment",
       id: "env-1",
-      changes: ["metadata-changed", "thread-storage-changed"],
+      changes: [
+        "metadata-changed",
+        "thread-storage-changed",
+        "diff-viewed-changed",
+      ],
     });
     expect(await primed.readBoth()).toEqual({ status: 1, pullRequest: 1 });
   });
@@ -283,5 +309,40 @@ describe("WorkspaceReadCaches", () => {
 
     caches.invalidateHost("host-1");
     expect(await primed.readBoth()).toEqual({ status: 3, pullRequest: 3 });
+  });
+});
+
+describe("diff-file in-flight reads", () => {
+  it("shares concurrent requests, but never reuses a completed result or joins work invalidated by an edit", async () => {
+    const hub = createFakeHub();
+    const caches = new WorkspaceReadCaches({ hub });
+    const result = {
+      outcome: "available" as const,
+      files: [],
+      shortstat: "",
+      mergeBaseRef: null,
+      truncated: false,
+    };
+    const counter = createCounter([result]);
+    const first = caches.diffFiles.read({ ...READ, load: counter.load });
+    const same = caches.diffFiles.read({ ...READ, load: counter.load });
+    expect(counter.loads).toHaveLength(1);
+    await Promise.all([first, same]);
+    const second = caches.diffFiles.read({ ...READ, load: counter.load });
+    expect(counter.loads).toHaveLength(2);
+    hub.emit({
+      type: "changed",
+      entity: "environment",
+      id: READ.environmentId,
+      changes: ["work-status-changed"],
+    });
+    const afterEdit = caches.diffFiles.read({ ...READ, load: counter.load });
+    expect(counter.loads).toHaveLength(3);
+    counter.loads[1]?.resolve(result);
+    await second;
+    const stillPending = caches.diffFiles.read({ ...READ, load: counter.load });
+    expect(counter.loads).toHaveLength(3);
+    counter.loads[2]?.resolve(result);
+    await Promise.all([afterEdit, stillPending]);
   });
 });

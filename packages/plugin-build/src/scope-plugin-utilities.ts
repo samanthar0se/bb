@@ -84,10 +84,15 @@ function scopeStatements(css: string, scope: Scope): string {
       }
 
       const nestedSibling = hasNestedSiblingRule(statement.body);
-      const selectors = splitSelectorList(prelude)
-        .flatMap((selector) => scopeSelector(selector, scope, !nestedSibling))
-        .join(",");
-      return `${selectors}{${statement.body}}`;
+      const originalSelectors = splitSelectorList(prelude);
+      const selectors = originalSelectors.flatMap((selector) =>
+        scopeSelector(selector, scope, !nestedSibling),
+      );
+      return (
+        originalSelectors.length === 1 ? selectors : [selectors.join(",")]
+      )
+        .map((selector) => `${selector}{${statement.body}}`)
+        .join("");
     })
     .join("");
 }
@@ -128,24 +133,29 @@ function splitStatements(css: string): Statement[] {
 
   for (let index = 0; index < css.length; index += 1) {
     const char = css[index];
+    if (char === "/" && css[index + 1] === "*") {
+      const end = css.indexOf("*/", index + 2);
+      if (end < 0)
+        throw new Error("Unterminated comment in compiled plugin CSS.");
+      if (
+        parenDepth === 0 &&
+        css.slice(preludeStart, index).trim().length === 0
+      ) {
+        statements.push({
+          prelude: css.slice(preludeStart, end + 2),
+          body: null,
+        });
+        preludeStart = end + 2;
+      }
+      index = end + 1;
+      continue;
+    }
     if (char === "\\") {
       index += 1;
       continue;
     }
     if (char === '"' || char === "'") {
       index = findStringEnd(css, index);
-      continue;
-    }
-    if (char === "/" && css[index + 1] === "*") {
-      const commentEnd = findCommentEnd(css, index);
-      if (css.slice(preludeStart, index).trim().length === 0) {
-        statements.push({
-          prelude: css.slice(preludeStart, commentEnd + 1),
-          body: null,
-        });
-        preludeStart = commentEnd + 1;
-      }
-      index = commentEnd;
       continue;
     }
     if (char === "(") parenDepth += 1;
@@ -307,13 +317,6 @@ function findParenEnd(selector: string, openIndex: number): number {
     }
   }
   return -1;
-}
-
-function findCommentEnd(css: string, openIndex: number): number {
-  const end = css.indexOf("*/", openIndex + 2);
-  if (end === -1)
-    throw new Error("Unterminated comment in compiled plugin CSS.");
-  return end + 1;
 }
 
 function findStringEnd(css: string, openIndex: number): number {

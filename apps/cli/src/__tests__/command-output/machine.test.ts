@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { Host } from "@bb/domain";
 import {
   collectLogPayloads,
@@ -225,7 +225,10 @@ describe("bb machine command output", () => {
       );
 
       if (command === "remove") {
-        expect(remove).toHaveBeenCalledWith({ param: { id: pending.id } });
+        expect(remove).toHaveBeenCalledWith({
+          param: { id: pending.id },
+          query: {},
+        });
       } else {
         expect(
           JSON.parse(String(vi.mocked(console.log).mock.calls[0]?.[0])),
@@ -341,6 +344,9 @@ describe("bb machine command output", () => {
 
   it("polls the host phase before reporting lifecycle completion", async () => {
     vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const suspend = vi.fn(async () => ({
       ...hosts[1]!,
       lifecycle: { ...hosts[1]!.lifecycle, phase: "suspending" as const },
@@ -376,7 +382,31 @@ describe("bb machine command output", () => {
 
     await runCommand(["machine", "remove", "laptop", "--yes"], register);
 
-    expect(remove).toHaveBeenCalledWith({ param: { id: "host-remote" } });
+    expect(remove).toHaveBeenCalledWith({
+      param: { id: "host-remote" },
+      query: {},
+    });
+    expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
+      "Machine host-remote removed",
+    ]);
+  });
+
+  it("bb machine remove --force skips cleanup for a stranded machine", async () => {
+    const remove = vi.fn(async () => undefined);
+    stubServerApi({
+      "v1.hosts.$get": vi.fn(async () => hosts),
+      "v1.hosts.:id.$delete": remove,
+    });
+
+    await runCommand(
+      ["machine", "remove", "laptop", "--force", "--yes"],
+      register,
+    );
+
+    expect(remove).toHaveBeenCalledWith({
+      param: { id: "host-remote" },
+      query: { force: "true" },
+    });
     expect(collectLogPayloads(vi.mocked(console.log))).toEqual([
       "Machine host-remote removed",
     ]);

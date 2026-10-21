@@ -1,3 +1,5 @@
+import { experimental_PluginRpcCallError } from "@get-bb/plugin-sdk";
+import { createRpcQueryHooks } from "@get-bb/plugin-sdk/internal/rpc-query-host";
 import { subscribeComposerSubmitted } from "./composer-submissions";
 import {
   useCallback,
@@ -54,7 +56,7 @@ import {
   listedComposerHandles,
   type ComposerSource,
 } from "@/lib/plugin-composer-handle";
-import { sdk } from "@/lib/sdk";
+import { BbHttpError, sdk } from "@/lib/sdk";
 import { getPluginBoundSdk } from "@/lib/plugin-bound-sdk";
 import { useSystemProviders } from "@/hooks/queries/system-queries";
 import { useSystemEnvironmentProviders } from "@/hooks/queries/environment-provider-queries";
@@ -77,6 +79,13 @@ import {
   AUTOMATION_EDIT_ROUTE_PATH,
 } from "@/lib/route-paths";
 import { useRouteState } from "@/hooks/useRouteState";
+import { RouteNavigationCallbackContext } from "@/components/ui/app-route-anchor";
+import { useStore } from "jotai";
+import { useIsCompactViewport } from "@bb/shared-ui/hooks/use-compact-viewport";
+import { getThreadConversationCollapsedAtom } from "@/components/secondary-panel/threadSecondaryPanelAtoms";
+import { lookupCachedThread } from "@/lib/plugin-sidebar-hooks";
+import { useSetRootComposeProjectId } from "@/lib/root-compose-selection";
+import { openThreadInSplit } from "@/lib/split-layout/openThreadInSplit";
 import { useServerConnectionState } from "@/hooks/useServerConnectionState";
 import { wsManager } from "@/lib/ws";
 import { pluginSdkSettingsQueryKey } from "@/hooks/queries/query-keys";
@@ -155,43 +164,57 @@ export async function callPluginRpc(
   pluginId: string,
   method: string,
   input?: unknown,
+  envelope = false,
 ): Promise<unknown> {
-  const serializedInput = serializePluginRpcInput(input ?? null);
-  const response = await fetchImpl(
-    `/api/v1/plugins/${encodeURIComponent(pluginId)}/rpc/${encodeURIComponent(method)}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: serializedInput,
-    },
-  );
-  const body = (await response.json().catch(() => null)) as {
-    ok?: unknown;
-    result?: unknown;
-    error?: unknown;
-  } | null;
-  if (!response.ok || body?.ok !== true) {
-    const structured =
-      typeof body?.error === "object" && body.error !== null
-        ? body.error
-        : null;
-    const message =
-      structured !== null &&
-      typeof Reflect.get(structured, "message") === "string"
-        ? String(Reflect.get(structured, "message"))
-        : typeof body?.error === "string"
-          ? body.error
-          : `rpc "${method}" failed (HTTP ${response.status})`;
-    const error = new Error(message);
-    if (structured !== null) {
-      const code = Reflect.get(structured, "code");
-      const issues = Reflect.get(structured, "issues");
-      if (typeof code === "string") Reflect.set(error, "code", code);
-      if (Array.isArray(issues)) Reflect.set(error, "issues", issues);
+  try {
+    let serializedInput: string;
+    try {
+      serializedInput = serializePluginRpcInput(input ?? null);
+    } catch (error) {
+      throw experimental_PluginRpcCallError.from(error, "invalid_input");
     }
-    throw error;
+    const response = await fetchImpl(
+      `/api/v1/plugins/${encodeURIComponent(pluginId)}/rpc/${encodeURIComponent(method)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: serializedInput,
+      },
+    );
+    const body = (await response.json().catch(() => null)) as {
+      ok?: unknown;
+      result?: unknown;
+      error?: unknown;
+    } | null;
+    if (!response.ok || body?.ok !== true) {
+      const structured =
+        typeof body?.error === "object" && body.error !== null
+          ? body.error
+          : null;
+      const message =
+        structured !== null &&
+        typeof Reflect.get(structured, "message") === "string"
+          ? String(Reflect.get(structured, "message"))
+          : typeof body?.error === "string"
+            ? body.error
+            : `rpc "${method}" failed (HTTP ${response.status})`;
+      const error = new Error(message);
+      Reflect.set(error, "status", response.status);
+      if (structured !== null) {
+        const code = Reflect.get(structured, "code");
+        const issues = Reflect.get(structured, "issues");
+        if (typeof code === "string") Reflect.set(error, "code", code);
+        if (Array.isArray(issues)) Reflect.set(error, "issues", issues);
+      }
+      throw experimental_PluginRpcCallError.from(
+        error,
+        response.ok ? "invalid_response" : "handler_error",
+      );
+    }
+    return envelope ? body : body.result;
+  } catch (error) {
+    throw experimental_PluginRpcCallError.from(error);
   }
-  return body.result;
 }
 
 export async function fetchPluginSdkSettings(
@@ -333,28 +356,50 @@ export function useBbContext(): BbContext {
 
 export function useBbNavigate(): BbNavigate {
   const pluginId = usePluginId();
+  const onNavigate = useContext(RouteNavigationCallbackContext);
   const location = useLocation();
   const openThreadPanelHandler = usePluginThreadPanelOpenHandler();
   const navigate = useNavigate();
   const appNavigation = useAppNavigationHost();
-  const toThread = useCallback(
-    (threadId: string) => {
+  const store = useStore();
+  const queryClient = useQueryClient();
+  const isCompact = useIsCompactViewport();
+  const setRootComposeProjectId = useSetRootComposeProjectId();
+  const toThread = useCallback<BbNavigate["toThread"]>(
+    (threadId, options) => {
+      onNavigate?.();
+      const open = (projectId: string) => {
+        store.set(getThreadConversationCollapsedAtom(threadId), false);
+        if (options?.split) {
+          openThreadInSplit({
+            store,
+            navigate,
+            projectId,
+            threadId,
+            isCompact,
+          });
+          return;
+        }
+        void navigate(getThreadRoutePath({ projectId, threadId }));
+      };
+      const cached = lookupCachedThread(queryClient, threadId);
+      if (cached !== null) {
+        open(cached.projectId);
+        return;
+      }
       void sdk.threads
         .get({ threadId })
-        .then((thread) =>
-          navigate(
-            getThreadRoutePath({ projectId: thread.projectId, threadId }),
-          ),
-        )
+        .then((thread) => open(thread.projectId))
         .catch(() => navigate(`/threads/${threadId}`));
     },
-    [navigate],
+    [isCompact, navigate, onNavigate, queryClient, store],
   );
   const toProject = useCallback(
     (projectId: string) => {
+      onNavigate?.();
       void navigate(getProjectComposeRoutePath(projectId));
     },
-    [navigate],
+    [navigate, onNavigate],
   );
   const toPluginPanel = useCallback(
     (path: string, options?: { subPath?: string; replace?: boolean }) => {
@@ -363,27 +408,46 @@ export function useBbNavigate(): BbNavigate {
         path,
         ...(options?.subPath !== undefined ? { subPath: options.subPath } : {}),
       });
+      onNavigate?.();
       void navigate(route, options?.replace ? { replace: true } : undefined);
     },
-    [navigate, pluginId],
+    [navigate, onNavigate, pluginId],
   );
-  const toCompose = useCallback(
-    (options?: { initialPrompt?: string; focusPrompt?: boolean }) => {
+  const toCompose = useCallback<BbNavigate["toCompose"]>(
+    (options) => {
       const replacesAutomationEditRoute =
         pluginId === AUTOMATIONS_PLUGIN_ID &&
         isAutomationEditRoutePath(location.pathname);
+      if (options?.projectId !== undefined) {
+        setRootComposeProjectId(options.projectId);
+      }
+      const hostId = options?.hostId?.trim() ?? "";
+      onNavigate?.();
       void navigate(getRootComposeRoutePath(), {
         ...(replacesAutomationEditRoute ? { replace: true } : {}),
         state: {
           focusPrompt: options?.focusPrompt ?? false,
           initialPrompt: options?.initialPrompt ?? "",
+          ...(options?.placement !== undefined
+            ? { placement: options.placement }
+            : {}),
+          ...(options?.environmentId !== undefined
+            ? { reuseEnvironmentId: options.environmentId }
+            : {}),
+          ...(hostId.length > 0 ? { newEnvironmentHostId: hostId } : {}),
           ...(replacesAutomationEditRoute
             ? { replaceInitialPrompt: true }
             : {}),
         },
       });
     },
-    [location.pathname, navigate, pluginId],
+    [
+      location.pathname,
+      navigate,
+      onNavigate,
+      pluginId,
+      setRootComposeProjectId,
+    ],
   );
   const openThreadPanel = useCallback<BbNavigate["openThreadPanel"]>(
     (options) => openThreadPanelHandler?.({ ...options, pluginId }) ?? false,
@@ -413,6 +477,20 @@ export function useBbNavigate(): BbNavigate {
     },
     [appNavigation],
   );
+  const experimental_openTerminal = useCallback<
+    BbNavigate["experimental_openTerminal"]
+  >(
+    async ({ terminalId }) => {
+      const session = await sdk.terminals
+        .get({ terminalId })
+        .catch((error: unknown) => {
+          if (error instanceof BbHttpError && error.status === 404) return null;
+          throw error;
+        });
+      return session !== null && appNavigation.openTerminal(session);
+    },
+    [appNavigation],
+  );
   return useMemo<BbNavigate>(
     () => ({
       toThread,
@@ -422,6 +500,7 @@ export function useBbNavigate(): BbNavigate {
       openThreadPanel,
       experimental_openFileExternally,
       experimental_openFilePreview,
+      experimental_openTerminal,
       openUrl,
     }),
     [
@@ -432,6 +511,7 @@ export function useBbNavigate(): BbNavigate {
       openThreadPanel,
       experimental_openFileExternally,
       experimental_openFilePreview,
+      experimental_openTerminal,
       openUrl,
     ],
   );
@@ -669,18 +749,34 @@ export function useComposer(): PluginComposerApi {
   );
   const routeDraft = usePromptDraftController(routeScope);
   const draftSource = useComposerDraftSource(composerHost, routeDraft);
-  const draftSnapshot = useCallback(
-    () => (tracksDraft.current ? draftSource.getCurrent() : null),
+  const subscribeToReadDraft = useCallback(
+    (onChange: () => void) =>
+      draftSource.subscribe(() => {
+        if (tracksDraft.current) onChange();
+      }),
     [draftSource],
   );
-  useSyncExternalStore(draftSource.subscribe, draftSnapshot, draftSnapshot);
+  useSyncExternalStore(
+    subscribeToReadDraft,
+    draftSource.getCurrent,
+    draftSource.getCurrent,
+  );
+  const subscribeSelection = composerHost?.subscribeSelection;
+  const subscribeToReadSelection = useCallback(
+    (onChange: () => void) =>
+      subscribeSelection === undefined
+        ? subscribeToNoComposerSelection()
+        : subscribeSelection(() => {
+            if (tracksSelection.current) onChange();
+          }),
+    [subscribeSelection],
+  );
   const selectionSnapshot = useCallback(
-    () =>
-      tracksSelection.current ? (composerHost?.getSelection?.() ?? null) : null,
+    () => composerHost?.getSelection?.() ?? null,
     [composerHost],
   );
   useSyncExternalStore(
-    composerHost?.subscribeSelection ?? subscribeToNoComposerSelection,
+    subscribeToReadSelection,
     selectionSnapshot,
     getNoComposerSelection,
   );
@@ -919,3 +1015,30 @@ export function useComposers(): readonly PluginComposerApi[] {
     [hosts, pluginId],
   );
 }
+
+export const {
+  experimental_useRpcQuery,
+  experimental_useRpcKeyedQuery,
+  experimental_useRpcMutation,
+  experimental_useRpcRefresh,
+} = createRpcQueryHooks(() => {
+  const pluginId = usePluginId();
+  const queryClient = useQueryClient();
+  return useMemo(
+    () => ({
+      pluginId,
+      queryClient,
+      call: (
+        id: string,
+        method: string,
+        input: import("@bb/domain").JsonValue,
+      ) => callPluginRpc(fetch, id, method, input, true),
+      subscribe: (id: string) => {
+        const target = { kind: "plugin", pluginId: id } as const;
+        wsManager.subscribe(target);
+        return () => wsManager.unsubscribe(target);
+      },
+    }),
+    [pluginId, queryClient],
+  );
+});

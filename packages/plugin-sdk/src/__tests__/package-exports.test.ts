@@ -30,6 +30,7 @@ describe("packed plugin SDK exports", () => {
       "./provider-bridge",
       "./provider-bridge/testing",
       "./provider-bridge/acp",
+      "./provider-bridge/acp-next",
       "./environment-provider",
       "./machine-provider",
       "./app",
@@ -43,6 +44,8 @@ describe("packed plugin SDK exports", () => {
       "./testing",
       "./testing/app",
       "./testing/host",
+      "./internal/rpc-tags",
+      "./internal/rpc-query-host",
     ]);
 
     for (const entry of Object.values(packageJson.exports)) {

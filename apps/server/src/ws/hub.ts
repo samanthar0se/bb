@@ -26,11 +26,18 @@ import {
   terminalServerMessageSchema,
   threadOpenSignalSchema,
   threadPaneActionSignalSchema,
+  type ThreadTimelineSignal,
   type ThreadPaneAction,
   type ThreadOpenFile,
   type ThreadOpenSplit,
   type TerminalServerMessage,
 } from "@bb/server-contract";
+import {
+  WatchedTargetRegistry,
+  type WatchedTarget,
+  type WatchedTargetChange,
+  type WatchedTargetKind,
+} from "./watched-targets.js";
 
 const TERMINAL_SOCKET_HIGH_WATER_BYTES = 1024 * 1024;
 const TERMINAL_SOCKET_MAX_QUEUE_BYTES = 32 * 1024 * 1024;
@@ -56,11 +63,12 @@ export type ServerChangedMessage =
       ChangedMessage,
       { entity: "thread" | "project" | "environment" | "host" }
     > & { id: string })
-  | Extract<ChangedMessage, { entity: "system" }>;
+  | Extract<ChangedMessage, { entity: "system" | "tags" | "plugin" }>;
 
 type ChangedMessageListener = (message: ServerChangedMessage) => void;
 
 interface PendingThreadListEventsAppended {
+  timelineSequence: number | undefined;
   eventTypes: Set<ThreadEventType>;
   merged: boolean;
   timeout: ReturnType<typeof setTimeout>;
@@ -128,6 +136,10 @@ function subscriptionKeysForMessage(message: ServerChangedMessage): string[] {
         subscriptionKey({ kind: "host-list" }),
         subscriptionKey({ kind: "host-detail", hostId: message.id }),
       ];
+    case "plugin":
+      return [subscriptionKey({ kind: "plugin", pluginId: message.pluginId })];
+    case "tags":
+      return [];
     case "system":
       return [subscriptionKey({ kind: "system" })];
   }
@@ -183,6 +195,7 @@ interface DaemonSessionCloseWaiter {
 }
 
 interface HostOnlineRpcWaiter {
+  detachAbortListener: () => void;
   reject: (reason?: Error) => void;
   resolve: (message: HostDaemonOnlineRpcResponseMessage) => void;
   sessionId: string;
@@ -210,6 +223,13 @@ export class HostOnlineRpcTimeoutError extends Error {
   }
 }
 
+export class HostOnlineRpcCancelledError extends Error {
+  constructor() {
+    super("Host RPC request was cancelled");
+    this.name = "HostOnlineRpcCancelledError";
+  }
+}
+
 export class HostOnlineRpcUnavailableError extends Error {
   constructor() {
     super("Host daemon is not connected");
@@ -218,8 +238,13 @@ export class HostOnlineRpcUnavailableError extends Error {
 }
 
 export class NotificationHub implements DbNotifier {
-  private readonly clientKeysBySocket = new Map<HubSocket, Set<string>>();
+  private readonly clientKeysBySocket = new Map<
+    HubSocket,
+    Map<string, RealtimeSubscriptionTarget>
+  >();
   private readonly clientSocketsByKey = new Map<string, Set<HubSocket>>();
+  private readonly hiddenClients = new Set<HubSocket>();
+  private readonly watchedTargets = new WatchedTargetRegistry();
   private readonly daemonSessions = new Map<
     string,
     {
@@ -280,10 +305,67 @@ export class NotificationHub implements DbNotifier {
     PendingThreadListEventsAppended
   >();
 
+  private readonly pendingTags = new Set<string>();
+
+  notifyPluginChanged(pluginId: string, tags: readonly string[] | null): void {
+    this.notifyClients({
+      type: "changed",
+      entity: "plugin",
+      pluginId,
+      tags: tags === null ? null : [...tags],
+    });
+  }
+
+  notifyTags(tags: readonly string[]): void {
+    if (tags.length === 0) return;
+    const scheduled = this.pendingTags.size > 0;
+    for (const tag of tags) this.pendingTags.add(tag);
+    if (scheduled) return;
+    queueMicrotask(() => {
+      const message: ServerChangedMessage = {
+        type: "changed",
+        entity: "tags",
+        tags: [...this.pendingTags],
+      };
+      this.pendingTags.clear();
+      this.notifyClients(message);
+    });
+  }
+
   registerClient(socket: HubSocket): void {
     if (!this.clientKeysBySocket.has(socket)) {
-      this.clientKeysBySocket.set(socket, new Set());
+      this.clientKeysBySocket.set(socket, new Map());
     }
+  }
+
+  setClientVisible(socket: HubSocket, visible: boolean): void {
+    this.registerClient(socket);
+    if (visible !== this.hiddenClients.has(socket)) {
+      return;
+    }
+    const targets = this.clientKeysBySocket.get(socket) ?? new Map();
+    if (visible) {
+      this.hiddenClients.delete(socket);
+      this.watchedTargets.update(
+        [...targets].map(([key, target]) => ({ key, target: { ...target } })),
+        [],
+      );
+      return;
+    }
+    this.hiddenClients.add(socket);
+    this.watchedTargets.update(
+      [],
+      [...targets.keys()].filter((key) => !this.isWatched(key)),
+    );
+  }
+
+  private isWatched(key: string): boolean {
+    for (const socket of this.clientSocketsByKey.get(key) ?? []) {
+      if (!this.hiddenClients.has(socket)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   unregisterClient(socket: HubSocket): void {
@@ -293,7 +375,8 @@ export class NotificationHub implements DbNotifier {
       return;
     }
 
-    for (const key of keys) {
+    const stoppedKeys: string[] = [];
+    for (const key of keys.keys()) {
       const sockets = this.clientSocketsByKey.get(key);
       if (!sockets) {
         continue;
@@ -302,9 +385,27 @@ export class NotificationHub implements DbNotifier {
       if (sockets.size === 0) {
         this.clientSocketsByKey.delete(key);
       }
+      if (!this.isWatched(key)) {
+        stoppedKeys.push(key);
+      }
     }
 
     this.clientKeysBySocket.delete(socket);
+    this.hiddenClients.delete(socket);
+    this.watchedTargets.update([], stoppedKeys);
+  }
+
+  onWatchedTargets<Kind extends WatchedTargetKind>(
+    kinds: readonly Kind[],
+    listener: (change: WatchedTargetChange<WatchedTarget<Kind>>) => void,
+  ): () => void {
+    return this.watchedTargets.listen(kinds, listener);
+  }
+
+  listWatchedTargets<Kind extends WatchedTargetKind>(
+    kind: Kind,
+  ): WatchedTarget<Kind>[] {
+    return this.watchedTargets.list(kind);
   }
 
   onChangedMessage(listener: ChangedMessageListener): () => void {
@@ -521,11 +622,14 @@ export class NotificationHub implements DbNotifier {
   subscribe(socket: HubSocket, target: RealtimeSubscriptionTarget): void {
     this.registerClient(socket);
     const key = subscriptionKey(target);
-    this.clientKeysBySocket.get(socket)?.add(key);
+    this.clientKeysBySocket.get(socket)?.set(key, target);
 
     const sockets = this.clientSocketsByKey.get(key) ?? new Set<HubSocket>();
     sockets.add(socket);
     this.clientSocketsByKey.set(key, sockets);
+    if (!this.hiddenClients.has(socket)) {
+      this.watchedTargets.update([{ key, target: { ...target } }], []);
+    }
   }
 
   unsubscribe(socket: HubSocket, target: RealtimeSubscriptionTarget): void {
@@ -540,6 +644,19 @@ export class NotificationHub implements DbNotifier {
     if (sockets.size === 0) {
       this.clientSocketsByKey.delete(key);
     }
+    if (!this.isWatched(key)) {
+      this.watchedTargets.update([], [key]);
+    }
+  }
+
+  sendThreadTimelineSignal(signal: ThreadTimelineSignal): number {
+    const sockets = this.clientSocketsByKey.get(subscriptionKey(signal.target));
+    if (!sockets) {
+      return 0;
+    }
+    const payload = JSON.stringify(signal);
+    this.notifyClientsByKeySet(sockets, payload);
+    return payload.length;
   }
 
   recordDaemonSessionPlatform(sessionId: string, platform: HostPlatform): void {
@@ -754,6 +871,7 @@ export class NotificationHub implements DbNotifier {
   requestHostOnlineRpc(args: {
     hostId: string;
     message: HostDaemonOnlineRpcRequestMessage;
+    signal?: AbortSignal;
     timeoutMs: number;
   }): Promise<HostDaemonOnlineRpcResponseMessage> {
     const sessionId = this.daemonSessionIdsByHost.get(args.hostId);
@@ -764,23 +882,39 @@ export class NotificationHub implements DbNotifier {
     if (!session) {
       return Promise.reject(new HostOnlineRpcUnavailableError());
     }
+    const signal = args.signal;
+    if (signal?.aborted) {
+      return Promise.reject(new HostOnlineRpcCancelledError());
+    }
+    const requestId = args.message.requestId;
 
     return new Promise<HostDaemonOnlineRpcResponseMessage>(
       (resolve, reject) => {
+        const abandon = (error: Error): void => {
+          this.deleteHostOnlineRpcWaiter(requestId, waiter);
+          this.sendHostOnlineRpcCancel(sessionId, requestId);
+          reject(error);
+        };
+        const onAbort = (): void => {
+          abandon(new HostOnlineRpcCancelledError());
+        };
         const waiter: HostOnlineRpcWaiter = {
+          detachAbortListener: () => {
+            signal?.removeEventListener("abort", onAbort);
+          },
           reject,
           resolve,
           sessionId,
           timeout: setTimeout(() => {
-            this.deleteHostOnlineRpcWaiter(args.message.requestId, waiter);
-            reject(new HostOnlineRpcTimeoutError());
+            abandon(new HostOnlineRpcTimeoutError());
           }, args.timeoutMs),
         };
-        this.hostOnlineRpcWaiters.set(args.message.requestId, waiter);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        this.hostOnlineRpcWaiters.set(requestId, waiter);
         try {
           session.socket.send(JSON.stringify(args.message));
         } catch (error) {
-          this.deleteHostOnlineRpcWaiter(args.message.requestId, waiter);
+          this.deleteHostOnlineRpcWaiter(requestId, waiter);
           reject(error instanceof Error ? error : new Error(String(error)));
         }
       },
@@ -990,8 +1124,20 @@ export class NotificationHub implements DbNotifier {
     waiter: HostOnlineRpcWaiter,
   ): void {
     clearTimeout(waiter.timeout);
+    waiter.detachAbortListener();
     if (this.hostOnlineRpcWaiters.get(requestId) === waiter) {
       this.hostOnlineRpcWaiters.delete(requestId);
+    }
+  }
+
+  private sendHostOnlineRpcCancel(sessionId: string, requestId: string): void {
+    try {
+      this.sendDaemonSessionMessage(sessionId, {
+        type: "host-rpc.cancel",
+        requestId,
+      });
+    } catch {
+      return;
     }
   }
 
@@ -1065,6 +1211,12 @@ export class NotificationHub implements DbNotifier {
       for (const eventType of eventTypes) {
         pending.eventTypes.add(eventType);
       }
+      if (message.metadata?.timelineSequence !== undefined) {
+        pending.timelineSequence = Math.max(
+          pending.timelineSequence ?? 0,
+          message.metadata.timelineSequence,
+        );
+      }
       pending.merged = true;
       return;
     }
@@ -1076,6 +1228,7 @@ export class NotificationHub implements DbNotifier {
     timeout.unref?.();
     this.pendingThreadListEventsAppendedByThread.set(threadId, {
       eventTypes: new Set(eventTypes),
+      timelineSequence: message.metadata?.timelineSequence,
       merged: false,
       timeout,
     });
@@ -1094,8 +1247,17 @@ export class NotificationHub implements DbNotifier {
       type: "changed",
       entity: "thread",
       id: threadId,
-      ...(pending.eventTypes.size > 0
-        ? { metadata: { eventTypes: [...pending.eventTypes] } }
+      ...(pending.eventTypes.size > 0 || pending.timelineSequence !== undefined
+        ? {
+            metadata: {
+              ...(pending.eventTypes.size > 0
+                ? { eventTypes: [...pending.eventTypes] }
+                : {}),
+              ...(pending.timelineSequence !== undefined
+                ? { timelineSequence: pending.timelineSequence }
+                : {}),
+            },
+          }
         : {}),
       changes: ["events-appended"],
     };
@@ -1123,7 +1285,9 @@ export class NotificationHub implements DbNotifier {
   }
 
   private notifyClients(message: ServerChangedMessage): void {
-    const sockets = new Set<HubSocket>();
+    const sockets = new Set<HubSocket>(
+      message.entity === "tags" ? this.clientKeysBySocket.keys() : [],
+    );
     for (const key of subscriptionKeysForMessage(message)) {
       const specificSockets = this.clientSocketsByKey.get(key);
       if (!specificSockets) {

@@ -19,9 +19,10 @@ List and create require exactly one explicit scope:
 
   bb terminal create --thread <thread-id> --command "pnpm dev"
   bb terminal create --environment <environment-id>
-  bb terminal create --machine <id-or-name> [--cwd <path>]
+  bb terminal create --machine <id-or-name> [--cwd <path>]   (alias: start)
     --host <id-or-name>                   Alias for --machine
     --title <title>                       Display title
+    --id <terminal-id>                    Use this ID (term_ plus 10 characters); fails if it exists
     --cols <n>                            Initial terminal columns
     --rows <n>                            Initial terminal rows
     --attach                              Attach after creating
@@ -50,7 +51,7 @@ runs:
   bb terminal resize <terminal-id> --cols <n> --rows <n>
   bb terminal rename <terminal-id> <title>
   bb terminal restart <terminal-id>       Atomically replaces it with a shell; does not replay the original command
-  bb terminal close <terminal-id> [--if-clean]
+  bb terminal close <terminal-id> [--if-clean]   (alias: stop)
 
   bb terminal output <terminal-id>
     --since-seq <n>                       Read output chunks from a sequence

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { TooltipProvider } from "@bb/shared-ui/tooltip";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Host } from "@bb/domain";
 import { makeHost } from "@bb/test-helpers/domain-fixtures";
@@ -30,78 +31,84 @@ describe("NewThreadPromptBoxUI", () => {
     expect(() =>
       render(
         <QueryClientProvider client={new QueryClient()}>
-          <NewThreadPromptBoxUI
-            value=""
-            mentionRanges={[]}
-            mentionMenuPlacement="bottom"
-            onChange={vi.fn()}
-            onSubmit={vi.fn()}
-            isSubmitting={false}
-            disabled={false}
-            history={{
-              currentDraft: { text: "", mentions: [], attachments: [] },
-              entries: [],
-              onSelectEntry: vi.fn(),
-            }}
-            typeahead={{
-              mention: {
-                results: { groups: [], suggestions: [] },
-                isLoading: false,
-                isError: false,
-                onQueryChange: vi.fn(),
-              },
-              command: {
-                triggers: [],
-                suggestions: [],
-                isLoading: false,
-                isError: false,
-                hasMore: false,
-                isLoadingMore: false,
-                loadMore: vi.fn(),
-                onQueryChange: vi.fn(),
-              },
-            }}
-            attachments={{ items: [] }}
-            modeConfig={{
-              environment: {
-                value: "host:host_test:local",
-                sources: [],
-                host,
-                isLocal: true,
-              },
-              worktree: { options: [], value: null, onChange: vi.fn() },
-              permission: {
-                value: "auto",
-                options: [{ value: "auto", label: "Approve for me" }],
-                onChange: vi.fn(),
-                supported: true,
-              },
-            }}
-            execution={{
-              provider: {
-                options: [{ value: "polytoken", label: "Polytoken" }],
-                selectedId: "polytoken",
-                hasMultiple: false,
-              },
-              model: {
-                active: null,
-                selected: "polytoken-managed",
-                options: [
-                  { value: "polytoken-managed", label: "Managed by Polytoken" },
-                ],
-                moreOptions: [],
-                isLoading: false,
-                loadFailed: false,
-                loadError: null,
-                onChange: vi.fn(),
-              },
-              reasoning: {
-                value: "medium",
-                options: [{ value: "medium", label: "Medium" }],
-                onChange: vi.fn(),
-              },
-            }}
-          />
+          <TooltipProvider>
+            <NewThreadPromptBoxUI
+              value=""
+              mentionRanges={[]}
+              mentionMenuPlacement="bottom"
+              onChange={vi.fn()}
+              onSubmit={vi.fn()}
+              isSubmitting={false}
+              disabled={false}
+              history={{
+                currentDraft: { text: "", mentions: [], attachments: [] },
+                entries: [],
+                onSelectEntry: vi.fn(),
+              }}
+              typeahead={{
+                mention: {
+                  results: { groups: [], suggestions: [] },
+                  isRefreshing: false,
+                  isLoading: false,
+                  isError: false,
+                  onQueryChange: vi.fn(),
+                },
+                command: {
+                  triggers: [],
+                  suggestions: [],
+                  isLoading: false,
+                  isError: false,
+                  hasMore: false,
+                  isLoadingMore: false,
+                  loadMore: vi.fn(),
+                  onQueryChange: vi.fn(),
+                },
+              }}
+              attachments={{ items: [] }}
+              modeConfig={{
+                environment: {
+                  value: "host:host_test:local",
+                  sources: [],
+                  host,
+                  isLocal: true,
+                },
+                worktree: { options: [], value: null, onChange: vi.fn() },
+                permission: {
+                  value: "auto",
+                  options: [{ value: "auto", label: "Approve for me" }],
+                  onChange: vi.fn(),
+                  supported: true,
+                },
+              }}
+              execution={{
+                provider: {
+                  options: [{ value: "polytoken", label: "Polytoken" }],
+                  selectedId: "polytoken",
+                  hasMultiple: false,
+                },
+                model: {
+                  active: null,
+                  selected: "polytoken-managed",
+                  options: [
+                    {
+                      value: "polytoken-managed",
+                      label: "Managed by Polytoken",
+                    },
+                  ],
+                  moreOptions: [],
+                  isLoading: false,
+                  loadFailed: false,
+                  loadError: null,
+                  onChange: vi.fn(),
+                },
+                reasoning: {
+                  value: "medium",
+                  options: [{ value: "medium", label: "Medium" }],
+                  onChange: vi.fn(),
+                },
+              }}
+            />
+          </TooltipProvider>
         </QueryClientProvider>,
       ),
     ).not.toThrow();

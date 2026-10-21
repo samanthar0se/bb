@@ -2,22 +2,12 @@
 
 import type { ComponentProps, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { TooltipProvider } from "@bb/shared-ui/tooltip";
 import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useComposerView } from "@/lib/plugin-sdk-hooks";
 import { NewThreadPromptBoxUI } from "./NewThreadPromptBox";
-
-vi.mock("@/components/promptbox/usePromptVoice", () => ({
-  usePromptVoice: () => ({
-    state: "idle",
-    isSupported: false,
-    stream: null,
-    start: vi.fn(),
-    stop: vi.fn(),
-    cancel: vi.fn(),
-  }),
-}));
 
 function SelectedProviderProbe() {
   const view = useComposerView();
@@ -44,6 +34,7 @@ const props: ComponentProps<typeof NewThreadPromptBoxUI> = {
   typeahead: {
     mention: {
       results: { groups: [], suggestions: [] },
+      isRefreshing: false,
       isLoading: false,
       isError: false,
       onQueryChange: vi.fn(),
@@ -92,7 +83,9 @@ describe("NewThreadPromptBoxUI", () => {
     const client = new QueryClient();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>
-        <MemoryRouter>{children}</MemoryRouter>
+        <TooltipProvider>
+          <MemoryRouter>{children}</MemoryRouter>
+        </TooltipProvider>
       </QueryClientProvider>
     );
     const rendered = render(<NewThreadPromptBoxUI {...props} />, { wrapper });

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import os from "node:os";
 import path from "node:path";
 import type { AgentRuntime, AgentRuntimeOptions } from "@bb/agent-runtime";
 import {
@@ -16,7 +15,7 @@ import {
   type HostDaemonContributedEnvEntry,
 } from "@bb/host-daemon-contract";
 import type { HostWatcher } from "@bb/host-watcher";
-import { createDeferredPromise } from "@bb/test-helpers";
+import { createDeferredPromise, makeTempDir } from "@bb/test-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DISPATCH_TEST_BRIDGE_LAUNCH,
@@ -76,8 +75,6 @@ type StartIdleProviderSessionReaperArgsForTest = Parameters<
   typeof startIdleProviderSessionReaper
 >[0];
 
-const tempDirs: string[] = [];
-
 function createLogger() {
   return {
     debug: vi.fn(),
@@ -85,12 +82,6 @@ function createLogger() {
     warn: vi.fn(),
     error: vi.fn(),
   } satisfies HostDaemonLogger;
-}
-
-async function makeTempDir(prefix: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
 }
 
 function readFetchUrl(input: RequestInfo | URL): URL {
@@ -141,6 +132,7 @@ function createFetchRecorder(
       return Response.json(
         {
           sessionId,
+          idleProviderSessionTimeoutMinutes: 30,
           machineEnvironment: {
             revision: 0,
             entries: args.machineEnvironment ?? [],
@@ -284,6 +276,9 @@ function createFakeRuntime(): AgentRuntime {
         selectedOnlyModels: [],
       };
     },
+    async listCommands() {
+      return { commands: [] };
+    },
     async providerHealth() {
       return { supported: false as const };
     },
@@ -376,14 +371,9 @@ async function settleReaperPromiseChain(): Promise<void> {
   }
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  await Promise.all(
-    tempDirs
-      .splice(0)
-      .map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
 });
 
 async function createAppFixture(
@@ -572,6 +562,7 @@ describe("createHostDaemonApp", () => {
           type: "provider.list_models",
           providerId: "cursor",
           bridgeLaunch: DISPATCH_TEST_BRIDGE_LAUNCH,
+          contributedEnv: [],
           cwd: "/tmp/worktree",
         },
       });
@@ -598,6 +589,7 @@ describe("createHostDaemonApp", () => {
       expect(listModels).toHaveBeenCalledWith({
         providerId: "cursor",
         cwd: "/tmp/worktree",
+        contributedEnv: [],
         bridgeLaunch: {
           ...dispatchTestRuntimeBridgeLaunch(dataDir),
         },
@@ -611,6 +603,7 @@ describe("createHostDaemonApp", () => {
             type: "provider.list_models",
             providerId: "cursor",
             bridgeLaunch: DISPATCH_TEST_BRIDGE_LAUNCH,
+            contributedEnv: [],
           },
         }),
       ).resolves.toMatchObject({
@@ -679,6 +672,7 @@ describe("createHostDaemonApp", () => {
             type: "provider.list_models",
             providerId: "codex",
             bridgeLaunch: DISPATCH_TEST_BRIDGE_LAUNCH,
+            contributedEnv: [],
           },
         }),
       ).resolves.toMatchObject({
@@ -698,7 +692,7 @@ describe("createHostDaemonApp", () => {
     }
   });
 
-  it("runs the idle provider session reaper on a non-overlapping interval", async () => {
+  it("uses the latest idle timeout without overlapping sweeps", async () => {
     const logger = createLogger();
     const firstReap =
       createDeferredPromise<RuntimeManagerReapIdleProviderSessionsResult>();
@@ -760,14 +754,18 @@ describe("createHostDaemonApp", () => {
     expect(timer.unref).toHaveBeenCalledTimes(1);
 
     triggerTick();
+    expect(reapIdleProviderSessions).not.toHaveBeenCalled();
+    reaper.setTimeoutMinutes(5);
+    triggerTick();
     await settleReaperPromiseChain();
     expect(reapIdleProviderSessions).toHaveBeenCalledTimes(1);
     expect(reapIdleProviderSessions).toHaveBeenNthCalledWith(1, {
-      idleForMs: 1_800_000,
+      idleForMs: 300_000,
       nowMs: 1_000,
     });
 
     nowMs = 2_000;
+    reaper.setTimeoutMinutes(60);
     triggerTick();
     expect(reapIdleProviderSessions).toHaveBeenCalledTimes(1);
 
@@ -802,7 +800,7 @@ describe("createHostDaemonApp", () => {
     await settleReaperPromiseChain();
     expect(reapIdleProviderSessions).toHaveBeenCalledTimes(2);
     expect(reapIdleProviderSessions).toHaveBeenNthCalledWith(2, {
-      idleForMs: 1_800_000,
+      idleForMs: 3_600_000,
       nowMs: 2_000,
     });
     expect(logger.warn).toHaveBeenCalledWith(
@@ -812,10 +810,18 @@ describe("createHostDaemonApp", () => {
       "Idle provider session reaper failed",
     );
 
+    reaper.setTimeoutMinutes(0);
+    triggerTick();
+    await settleReaperPromiseChain();
+    expect(reapIdleProviderSessions).toHaveBeenNthCalledWith(3, {
+      idleForMs: 0,
+      nowMs: 2_000,
+    });
+
     reaper.stop();
     expect(timer.clear).toHaveBeenCalledTimes(1);
     triggerTick();
-    expect(reapIdleProviderSessions).toHaveBeenCalledTimes(2);
+    expect(reapIdleProviderSessions).toHaveBeenCalledTimes(3);
   });
 
   it("reconnects through the server connection when event posting sees an inactive session", async () => {

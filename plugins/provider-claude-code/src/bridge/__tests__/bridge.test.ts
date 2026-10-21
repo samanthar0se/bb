@@ -23,13 +23,19 @@ import {
   type RuntimePermissionScope,
 } from "@get-bb/plugin-sdk/provider-bridge";
 
-const { forkSessionMock, queryMock } = vi.hoisted(() => ({
+const { forkSessionMock, queryMock, contextQueryMock } = vi.hoisted(() => ({
   forkSessionMock: vi.fn(),
   queryMock: vi.fn(),
+  contextQueryMock: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
-  query: queryMock,
+  query: (args: {
+    options?: { persistSession?: boolean; forkSession?: boolean };
+  }) =>
+    args.options?.persistSession === false && args.options.forkSession === true
+      ? contextQueryMock(args)
+      : queryMock(args),
   forkSession: forkSessionMock,
   createSdkMcpServer: vi.fn(() => ({})),
   tool: vi.fn((_name, _desc, _schema, handler) => handler),
@@ -67,19 +73,10 @@ interface AssistantToolUseMessageArgs {
   toolUseId: string;
 }
 
-interface CanUseToolPolicyAllowExpectation {
-  behavior: "allow";
-  updatedInput: Record<string, unknown>;
-}
-
-interface CanUseToolPolicyDenyExpectation {
+interface CanUseToolPolicyExpectation {
   behavior: "deny";
   messageIncludes: string;
 }
-
-type CanUseToolPolicyExpectation =
-  | CanUseToolPolicyAllowExpectation
-  | CanUseToolPolicyDenyExpectation;
 
 interface CanUseToolPolicyCase {
   blockedPath?: string;
@@ -93,6 +90,7 @@ interface CanUseToolPolicyCase {
 }
 
 interface ControlledClaudeQuery {
+  mcpServerStatus: ReturnType<typeof vi.fn>;
   getContextUsage: ReturnType<typeof vi.fn>;
   applyFlagSettings: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
@@ -103,11 +101,13 @@ interface ControlledClaudeQuery {
   interrupt: ReturnType<typeof vi.fn>;
   setModel: ReturnType<typeof vi.fn>;
   setPermissionMode: ReturnType<typeof vi.fn>;
+  supportedCommands: ReturnType<typeof vi.fn>;
   [Symbol.asyncIterator](): AsyncIterator<SDKMessage>;
 }
 
 interface ClaudeQueryCallOptions {
   allowDangerouslySkipPermissions?: boolean;
+  mcpServers?: BridgeSessionOptions["mcpServers"];
   canUseTool?: CanUseTool;
   env?: Record<string, string | undefined>;
   extraArgs?: Record<string, string | null>;
@@ -116,6 +116,7 @@ interface ClaudeQueryCallOptions {
   permissionMode?: ClaudePermissionMode;
   resume?: string;
   sandbox?: BridgeSessionOptions["sandbox"];
+  settings?: BridgeSessionOptions["settings"];
   sessionId?: string;
   settingSources?: string[];
   stderr?: (data: string) => void;
@@ -311,11 +312,15 @@ function createControlledClaudeQuery(): ControlledClaudeQuery {
     finish() {
       pushResult({ value: undefined, done: true });
     },
+    mcpServerStatus: vi
+      .fn()
+      .mockResolvedValue([{ name: "bb-bridge", status: "connected" }]),
     getContextUsage: vi.fn().mockResolvedValue(null),
     initializationResult: vi.fn(),
     interrupt: vi.fn().mockResolvedValue(undefined),
     setModel: vi.fn().mockResolvedValue(undefined),
     setPermissionMode: vi.fn().mockResolvedValue(undefined),
+    supportedCommands: vi.fn().mockResolvedValue([]),
     [Symbol.asyncIterator]() {
       return iterator;
     },
@@ -631,6 +636,19 @@ function isApprovalInteraction(message: BridgeJsonRpcOutputMessage): boolean {
   return interactionPayload(message)?.kind === "approval";
 }
 
+async function waitForBridgeRequest(
+  bridge: BridgeJsonRpcTestHarness,
+  matches: (message: BridgeJsonRpcOutputMessage) => boolean,
+): Promise<BridgeJsonRpcOutputMessage> {
+  return vi.waitFor(() => {
+    const request = bridge.messages.find(matches);
+    if (request?.id === undefined) {
+      throw new Error("Expected bridge request");
+    }
+    return request;
+  });
+}
+
 function isUserQuestionInteraction(
   message: BridgeJsonRpcOutputMessage,
 ): boolean {
@@ -648,9 +666,7 @@ async function forwardAskUserQuestion({
     signal: new AbortController().signal,
     toolUseID,
   });
-  await bridge.flushWork();
-
-  const questionRequest = bridge.messages.find((message) =>
+  const questionRequest = await waitForBridgeRequest(bridge, (message) =>
     isUserQuestionInteraction(message),
   );
   if (questionRequest?.id === undefined) {
@@ -665,6 +681,7 @@ async function forwardAskUserQuestion({
 describe("bridge", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    contextQueryMock.mockImplementation(() => createControlledClaudeQuery());
     forkSessionMock.mockResolvedValue({ sessionId: "forked-session-1" });
     queryMock.mockReturnValue({
       initializationResult: vi.fn().mockResolvedValue({
@@ -720,15 +737,20 @@ describe("bridge", () => {
     async (capacity, delayed) => {
       const bridge = createBridgeJsonRpcTestHarness(handleLine);
       const queries: ControlledClaudeQuery[] = [];
+      const contextReads = vi.fn().mockResolvedValue({
+        categories: [{ name: "Provider category", tokens: 450 }],
+        totalTokens: 450,
+        rawMaxTokens: capacity,
+        model: "claude-test",
+        isAutoCompactEnabled: false,
+      });
+      contextQueryMock.mockImplementation(() => {
+        const query = createControlledClaudeQuery();
+        query.getContextUsage = contextReads;
+        return query;
+      });
       queryMock.mockImplementation(() => {
         const query = createControlledClaudeQuery();
-        query.getContextUsage.mockResolvedValue({
-          categories: [{ name: "Provider category", tokens: 450 }],
-          totalTokens: 450,
-          rawMaxTokens: capacity,
-          model: "claude-test",
-          isAutoCompactEnabled: false,
-        });
         queries.push(query);
         return query;
       });
@@ -763,7 +785,7 @@ describe("bridge", () => {
         );
         await readNextPrompt(getLatestQueryCall());
         await bridge.waitForResponse(2);
-        if (delayed) queries[0].getContextUsage.mockReturnValueOnce(pending);
+        if (delayed) contextReads.mockReturnValueOnce(pending);
         queries[0].emit({
           type: "system",
           subtype: "init",
@@ -782,9 +804,7 @@ describe("bridge", () => {
           session_id: threadId,
         });
         if (delayed) {
-          await vi.waitFor(() =>
-            expect(queries[0].getContextUsage).toHaveBeenCalledTimes(1),
-          );
+          await vi.waitFor(() => expect(contextReads).toHaveBeenCalledTimes(1));
           queries[0].emit(
             createAssistantToolUseMessage({
               parentToolUseId: null,
@@ -858,7 +878,7 @@ describe("bridge", () => {
             },
           ]);
         });
-        expect(queries[0].getContextUsage).toHaveBeenCalledTimes(1);
+        expect(contextReads).toHaveBeenCalledTimes(1);
         queries[0].emit(
           createAssistantToolUseMessage({
             parentToolUseId: null,
@@ -881,10 +901,8 @@ describe("bridge", () => {
           expect(usage?.snapshot).toBeUndefined();
         });
         queries[0].emit(createSuccessfulResultMessage(threadId));
-        await vi.waitFor(() =>
-          expect(queries[0].getContextUsage).toHaveBeenCalledTimes(2),
-        );
-        queries[0].getContextUsage.mockResolvedValue(null);
+        await vi.waitFor(() => expect(contextReads).toHaveBeenCalledTimes(2));
+        contextReads.mockResolvedValue(null);
         queries[0].emit({
           type: "system",
           subtype: "compact_boundary",
@@ -908,7 +926,7 @@ describe("bridge", () => {
             modelContextWindow: null,
             estimated: true,
           });
-          expect(queries[0].getContextUsage).toHaveBeenCalledTimes(3);
+          expect(contextReads).toHaveBeenCalledTimes(3);
         });
       } finally {
         await stopBridgeThread({ bridge, queries, threadId });
@@ -916,6 +934,264 @@ describe("bridge", () => {
       }
     },
   );
+
+  it("keeps prompts on the live session while automatic context reporting is blocked", async () => {
+    const bridge = createBridgeJsonRpcTestHarness(handleLine);
+    const live = createControlledClaudeQuery();
+    const reports: ControlledClaudeQuery[] = [];
+    queryMock.mockReturnValue(live);
+    contextQueryMock.mockImplementation(() => {
+      const report = createControlledClaudeQuery();
+      report.getContextUsage.mockReturnValue(new Promise(() => {}));
+      reports.push(report);
+      return report;
+    });
+    const threadId = "thread-isolated-context";
+    try {
+      bridge.sendRequest(1, "thread/start", {
+        threadId,
+        cwd: "/tmp/worktree",
+        instructionMode: "append",
+        options: canonicalOptions({}),
+        dynamicTools: [
+          {
+            name: "probe_tool",
+            description: "Probe tool",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+      });
+      await bridge.waitForResponse(1);
+      bridge.sendRequest(
+        2,
+        "turn/start",
+        canonicalTurnParams({
+          threadId,
+          input: [{ type: "text", text: "first" }],
+        }),
+      );
+      await readNextPrompt(getLatestQueryCall());
+      await bridge.waitForResponse(2);
+      live.emit(createSuccessfulResultMessage(threadId));
+      await bridge.flushWork();
+      expect(reports).toHaveLength(1);
+      expect(reports[0].getContextUsage).toHaveBeenCalledOnce();
+      const reportOptions = contextQueryMock.mock.calls[0][0].options;
+      expect(reportOptions).toMatchObject({
+        resume: threadId,
+        forkSession: true,
+        persistSession: false,
+        settings: { disableAllHooks: true },
+      });
+      expect(reportOptions.hooks).toBeUndefined();
+      expect(reportOptions.mcpServers["bb-bridge"].instance).not.toBe(
+        getLatestQueryOptions().mcpServers?.["bb-bridge"].instance,
+      );
+
+      bridge.sendRequest(
+        3,
+        "turn/start",
+        canonicalTurnParams({
+          threadId,
+          input: [{ type: "text", text: "continue while report is blocked" }],
+        }),
+      );
+      await expect(readNextPromptText(getLatestQueryCall())).resolves.toBe(
+        "continue while report is blocked",
+      );
+      await bridge.waitForResponse(3);
+      expect(live.getContextUsage).not.toHaveBeenCalled();
+      expect(live.close).not.toHaveBeenCalled();
+      expect(queryMock).toHaveBeenCalledOnce();
+
+      live.emit(createSuccessfulResultMessage(threadId));
+      await bridge.flushWork();
+      expect(reports[0].close).toHaveBeenCalledOnce();
+      expect(reports).toHaveLength(2);
+      expect(
+        assembleCapturedThreadEvents(bridge.messages, "claude-code").filter(
+          (event) => event.type === "turn/completed",
+        ),
+      ).toHaveLength(2);
+    } finally {
+      await stopBridgeThread({ bridge, queries: [live], threadId });
+      expect(
+        reports.every((report) => report.close.mock.calls.length === 1),
+      ).toBe(true);
+      bridge.restore();
+    }
+  });
+
+  it("publishes the session's live slash commands as provider commands", async () => {
+    const bridge = createBridgeJsonRpcTestHarness(handleLine);
+    const queries: ControlledClaudeQuery[] = [];
+    queryMock.mockImplementation(() => {
+      const query = createControlledClaudeQuery();
+      query.supportedCommands.mockResolvedValue([
+        { name: "simplify", description: "Simplify code", argumentHint: "" },
+        {
+          name: "code-review",
+          description: "Review the diff",
+          argumentHint: "[low|high]",
+        },
+        { name: "doctor", description: "Health check", argumentHint: "" },
+        { name: "model", description: "Set the model", argumentHint: "" },
+        {
+          name: "__remote-workflow",
+          description: "Internal",
+          argumentHint: "",
+        },
+      ]);
+      queries.push(query);
+      return query;
+    });
+    const threadId = "thread-provider-commands";
+    const providerCommandStates = () =>
+      assembleCapturedThreadEvents(bridge.messages, "claude-code").flatMap(
+        (event) =>
+          event.type === "thread/extensionState/updated" &&
+          event.kind === "bb/provider-commands"
+            ? [event.payload]
+            : [],
+      );
+    const init = {
+      type: "system",
+      subtype: "init",
+      apiKeySource: "none",
+      claude_code_version: "2.1.301",
+      cwd: "/tmp/worktree",
+      tools: [],
+      mcp_servers: [],
+      model: "claude-opus-5-5",
+      permissionMode: "default",
+      slash_commands: [
+        "simplify",
+        "code-review",
+        "doctor",
+        "model",
+        "__remote-workflow",
+      ],
+      terminal_slash_commands: ["doctor"],
+      output_style: "default",
+      skills: ["simplify", "code-review", "doctor"],
+      plugins: [],
+      uuid: "00000000-0000-4000-8000-000000000001",
+      session_id: threadId,
+    } satisfies SDKMessage;
+    try {
+      bridge.sendRequest(1, "thread/start", {
+        threadId,
+        cwd: "/tmp/worktree",
+        instructionMode: "append",
+        options: {
+          permissionMode: "accept-edits",
+          permissionScope: "workspace",
+          approvalReviewer: "user",
+          permissionEscalation: "ask",
+          instructions: "test",
+          providerOptions: { workflowsEnabled: false },
+        },
+      });
+      await bridge.waitForResponse(1);
+      bridge.sendRequest(
+        2,
+        "turn/start",
+        canonicalTurnParams({
+          threadId,
+          providerThreadId: threadId,
+          input: [{ type: "text", text: "hello" }],
+        }),
+      );
+      await readNextPrompt(getLatestQueryCall());
+      await bridge.waitForResponse(2);
+      queries[0].emit(init);
+      await vi.waitFor(() =>
+        expect(providerCommandStates()).toEqual([
+          {
+            commands: [
+              { name: "simplify", description: "Simplify code" },
+              {
+                name: "code-review",
+                description: "Review the diff",
+                inputHint: "[low|high]",
+              },
+            ],
+          },
+        ]),
+      );
+      queries[0].emit({
+        ...init,
+        uuid: "00000000-0000-4000-8000-000000000002",
+      });
+      await vi.waitFor(() =>
+        expect(queries[0].supportedCommands).toHaveBeenCalledTimes(2),
+      );
+      queries[0].emit({
+        type: "system",
+        subtype: "commands_changed",
+        commands: [
+          { name: "simplify", description: "Simplify code", argumentHint: "" },
+          { name: "model", description: "Set the model", argumentHint: "" },
+          {
+            name: "deploy",
+            description: "Discovered mid-session",
+            argumentHint: "",
+          },
+        ],
+        uuid: "00000000-0000-4000-8000-000000000003",
+        session_id: threadId,
+      });
+      await vi.waitFor(() =>
+        expect(providerCommandStates()).toEqual([
+          expect.anything(),
+          {
+            commands: [
+              { name: "simplify", description: "Simplify code" },
+              { name: "deploy", description: "Discovered mid-session" },
+            ],
+          },
+        ]),
+      );
+    } finally {
+      await stopBridgeThread({ bridge, queries, threadId });
+      bridge.restore();
+    }
+  });
+
+  it("lists a folder's commands from Claude Code without sending a prompt", async () => {
+    const bridge = createBridgeJsonRpcTestHarness(handleLine);
+    const close = vi.fn();
+    queryMock.mockReturnValue({
+      initializationResult: vi.fn().mockResolvedValue({
+        commands: [
+          { name: "simplify", description: "Simplify code", argumentHint: "" },
+          { name: "model", description: "Set the model", argumentHint: "" },
+          {
+            name: "bb-global-skills:bb-cli",
+            description: "Injected by bb",
+            argumentHint: "",
+          },
+        ],
+      }),
+      close,
+    });
+
+    try {
+      bridge.sendRequest(1, "commands/list", { cwd: "/tmp/commands-project" });
+      const response = await bridge.waitForResponse(1);
+
+      expect(response.result).toEqual({
+        commands: [{ name: "simplify", description: "Simplify code" }],
+      });
+      expect(queryMock).toHaveBeenCalledWith({
+        prompt: expect.anything(),
+        options: expect.objectContaining({ cwd: "/tmp/commands-project" }),
+      });
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      bridge.restore();
+    }
+  });
 
   it("answers model/list with the missing-executable code when the Claude CLI is absent", async () => {
     const bridge = createBridgeJsonRpcTestHarness(handleLine);
@@ -1007,6 +1283,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1023,11 +1300,44 @@ describe("bridge", () => {
     expect(options.systemPrompt).toBe("You are a manager.");
   });
 
+  it.each([
+    { artifactsEnabled: true, inherited: {}, expected: "1" },
+    { artifactsEnabled: false, inherited: {}, expected: undefined },
+    {
+      artifactsEnabled: false,
+      inherited: { CLAUDE_CODE_ARTIFACT: "1" },
+      expected: "1",
+    },
+  ])(
+    "sets CLAUDE_CODE_ARTIFACT=$expected with artifactsEnabled=$artifactsEnabled and inherited $inherited",
+    ({ artifactsEnabled, inherited, expected }) => {
+      const options = buildSessionOptions(
+        {
+          chromeEnabled: false,
+          disable1MContext: false,
+          artifactsEnabled,
+          sandboxEnabled: true,
+          serviceTier: "default",
+          workflowsEnabled: false,
+          baseInstructions: "You are a coder.",
+          cwd: "/tmp/worktree",
+          instructionMode: "append",
+          permissionMode: "default",
+          permissionScope: "workspace",
+        },
+        inherited,
+      );
+
+      expect(options.env?.CLAUDE_CODE_ARTIFACT).toBe(expected);
+    },
+  );
+
   it("decomposes ultracode into xhigh effort plus the ultracode settings flag", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         baseInstructions: "You are a coder.",
@@ -1055,6 +1365,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         baseInstructions: "You are a coder.",
@@ -1082,6 +1393,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         workflowsEnabled: false,
         serviceTier: "fast",
@@ -1102,6 +1414,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1128,6 +1441,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1153,6 +1467,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1188,6 +1503,7 @@ describe("bridge", () => {
         {
           chromeEnabled: false,
           disable1MContext: false,
+          artifactsEnabled: false,
           sandboxEnabled: true,
           workflowsEnabled: false,
           cwd: "/tmp/worktree",
@@ -1217,6 +1533,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1245,6 +1562,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1266,6 +1584,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1294,6 +1613,7 @@ describe("bridge", () => {
         {
           chromeEnabled: false,
           disable1MContext: false,
+          artifactsEnabled: false,
           sandboxEnabled: true,
           serviceTier: "default",
           workflowsEnabled: false,
@@ -1316,6 +1636,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1331,6 +1652,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1366,6 +1688,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: true,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1389,6 +1712,7 @@ describe("bridge", () => {
       {
         chromeEnabled: false,
         disable1MContext: false,
+        artifactsEnabled: false,
         sandboxEnabled: false,
         serviceTier: "default",
         workflowsEnabled: false,
@@ -1415,12 +1739,6 @@ describe("bridge", () => {
       permissionScope: "workspace",
       approvalReviewer: "automatic",
       permissionEscalation: "deny",
-    } satisfies RuntimePermissionPolicy;
-    const FULL_POLICY = {
-      permissionMode: "full",
-      permissionScope: "full",
-      approvalReviewer: null,
-      permissionEscalation: null,
     } satisfies RuntimePermissionPolicy;
 
     const policyCases = [
@@ -1453,24 +1771,6 @@ describe("bridge", () => {
         expected: {
           behavior: "deny",
           messageIncludes: "bb's workspace sandbox allows work inside",
-        },
-      },
-      {
-        id: "full-bypass-allow",
-        name: "full bypass allows Bash input unchanged",
-        policy: FULL_POLICY,
-        toolName: "Bash",
-        decisionReason: "This command requires approval",
-        input: {
-          command: "git status --short",
-          description: "Permission boundary test",
-        },
-        expected: {
-          behavior: "allow",
-          updatedInput: {
-            command: "git status --short",
-            description: "Permission boundary test",
-          },
         },
       },
     ] satisfies CanUseToolPolicyCase[];
@@ -1515,23 +1815,11 @@ describe("bridge", () => {
           throw new Error(`Expected ${testCase.name} to return a decision`);
         }
 
-        switch (testCase.expected.behavior) {
-          case "allow":
-            expect(result).toMatchObject({
-              behavior: "allow",
-              toolUseID,
-              updatedInput: testCase.expected.updatedInput,
-            });
-            expect("decisionClassification" in result).toBe(false);
-            break;
-          case "deny":
-            if (result.behavior !== "deny") {
-              throw new Error(`Expected ${testCase.name} to deny`);
-            }
-            expect(result.toolUseID).toBe(toolUseID);
-            expect(result.message).toContain(testCase.expected.messageIncludes);
-            break;
+        if (result.behavior !== "deny") {
+          throw new Error(`Expected ${testCase.name} to deny`);
         }
+        expect(result.toolUseID).toBe(toolUseID);
+        expect(result.message).toContain(testCase.expected.messageIncludes);
 
         bridge.sendRequest(stopRequestId, "thread/stop", {
           threadId,
@@ -1587,9 +1875,7 @@ describe("bridge", () => {
           toolUseID,
         },
       );
-      await bridge.flushWork();
-
-      const permissionRequest = bridge.messages.find((message) =>
+      const permissionRequest = await waitForBridgeRequest(bridge, (message) =>
         isApprovalInteraction(message),
       );
       if (permissionRequest?.id === undefined) {
@@ -1658,9 +1944,7 @@ describe("bridge", () => {
           toolUseID,
         },
       );
-      await bridge.flushWork();
-
-      const permissionRequest = bridge.messages.find((message) =>
+      const permissionRequest = await waitForBridgeRequest(bridge, (message) =>
         isApprovalInteraction(message),
       );
       if (permissionRequest?.id === undefined) {
@@ -1731,8 +2015,7 @@ describe("bridge", () => {
           toolUseID: "tool-npm",
         },
       );
-      await bridge.flushWork();
-      const npmRequest = bridge.messages.find((message) =>
+      const npmRequest = await waitForBridgeRequest(bridge, (message) =>
         isApprovalInteraction(message),
       );
       if (npmRequest?.id === undefined) {
@@ -1801,8 +2084,8 @@ describe("bridge", () => {
           toolUseID: "tool-python",
         },
       );
-      await bridge.flushWork();
-      const pythonRequest = bridge.messages.find(
+      const pythonRequest = await waitForBridgeRequest(
+        bridge,
         (message) =>
           isApprovalInteraction(message) && message.id !== npmRequest.id,
       );
@@ -1851,9 +2134,7 @@ describe("bridge", () => {
           toolUseID,
         },
       );
-      await bridge.flushWork();
-
-      const permissionRequest = bridge.messages.find((message) =>
+      const permissionRequest = await waitForBridgeRequest(bridge, (message) =>
         isApprovalInteraction(message),
       );
       if (permissionRequest?.id === undefined) {
@@ -1886,7 +2167,142 @@ describe("bridge", () => {
     }
   });
 
-  it("does not let a session grant for a folder cover a later request that names no folder", async () => {
+  it("forwards a permissions.ask rule prompt in full access mode", async () => {
+    const bridge = createBridgeJsonRpcTestHarness(handleLine);
+    const queries: ControlledClaudeQuery[] = [];
+    queryMock.mockImplementation(() => {
+      const query = createControlledClaudeQuery();
+      queries.push(query);
+      return query;
+    });
+
+    const uidSpy =
+      process.platform === "win32"
+        ? null
+        : vi.spyOn(process, "getuid").mockReturnValue(1000);
+    try {
+      const threadId = "thread-full-ask-rule";
+      const toolUseID = "tool-full-ask-rule";
+      bridge.sendRequest(1, "thread/start", {
+        threadId,
+        cwd: "/tmp/worktree",
+        instructionMode: "append",
+        options: {
+          permissionMode: "full",
+          permissionScope: "full",
+          approvalReviewer: null,
+          permissionEscalation: null,
+          instructions: "test",
+          providerOptions: {
+            workflowsEnabled: false,
+          },
+        },
+      });
+      await bridge.waitForResponse(1);
+
+      const resultPromise = getLastCanUseTool()(
+        "Bash",
+        { command: "git push origin main" },
+        {
+          description: "Push the branch to origin",
+          requestId: "control-request",
+          signal: new AbortController().signal,
+          toolUseID,
+        },
+      );
+      await bridge.flushWork();
+
+      const permissionRequest = bridge.messages.find((message) =>
+        isApprovalInteraction(message),
+      );
+      if (permissionRequest?.id === undefined) {
+        throw new Error("Expected forwarded permission request");
+      }
+      expect(permissionRequest.params).toMatchObject({
+        threadId,
+        payload: {
+          kind: "approval",
+          subject: expect.objectContaining({ itemId: toolUseID }),
+        },
+      });
+
+      handleLine(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: permissionRequest.id,
+          result: { decision: "deny", grantedPermissions: null },
+        }),
+      );
+      await expect(resultPromise).resolves.toMatchObject({
+        behavior: "deny",
+        toolUseID,
+      });
+
+      await stopBridgeThread({ bridge, queries, threadId });
+    } finally {
+      uidSpy?.mockRestore();
+      bridge.restore();
+    }
+  });
+
+  it("keeps approving requests itself in full access mode when running as root", async ({
+    skip,
+  }) => {
+    skip(process.platform === "win32", "Windows has no root uid");
+    const bridge = createBridgeJsonRpcTestHarness(handleLine);
+    const queries: ControlledClaudeQuery[] = [];
+    queryMock.mockImplementation(() => {
+      const query = createControlledClaudeQuery();
+      queries.push(query);
+      return query;
+    });
+
+    const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(0);
+    try {
+      const threadId = "thread-full-root";
+      const toolUseID = "tool-full-root";
+      bridge.sendRequest(1, "thread/start", {
+        threadId,
+        cwd: "/tmp/worktree",
+        instructionMode: "append",
+        options: {
+          permissionMode: "full",
+          permissionScope: "full",
+          approvalReviewer: null,
+          permissionEscalation: null,
+          instructions: "test",
+          providerOptions: {
+            workflowsEnabled: false,
+          },
+        },
+      });
+      await bridge.waitForResponse(1);
+
+      expect(getLatestQueryCall().options.permissionMode).toBe("default");
+      await expect(
+        getLastCanUseTool()(
+          "Bash",
+          { command: "npm --version" },
+          {
+            decisionReason: "This command requires approval",
+            requestId: "control-request",
+            signal: new AbortController().signal,
+            toolUseID,
+          },
+        ),
+      ).resolves.toMatchObject({ behavior: "allow", toolUseID });
+      expect(
+        bridge.messages.filter((message) => isApprovalInteraction(message)),
+      ).toHaveLength(0);
+
+      await stopBridgeThread({ bridge, queries, threadId });
+    } finally {
+      uidSpy.mockRestore();
+      bridge.restore();
+    }
+  });
+
+  it("keeps folder grants scoped and clears them on live permission changes", async () => {
     const bridge = createBridgeJsonRpcTestHarness(handleLine);
     const queries: ControlledClaudeQuery[] = [];
     queryMock.mockImplementation(() => {
@@ -1909,8 +2325,7 @@ describe("bridge", () => {
           toolUseID: "tool-path-grant",
         },
       );
-      await bridge.flushWork();
-      const pathRequest = bridge.messages.find((message) =>
+      const pathRequest = await waitForBridgeRequest(bridge, (message) =>
         isApprovalInteraction(message),
       );
       if (pathRequest?.id === undefined) {
@@ -1943,8 +2358,8 @@ describe("bridge", () => {
           toolUseID: "tool-escalation",
         },
       );
-      await bridge.flushWork();
-      const escalationRequest = bridge.messages.find(
+      const escalationRequest = await waitForBridgeRequest(
+        bridge,
         (message) =>
           isApprovalInteraction(message) && message.id !== pathRequest.id,
       );
@@ -1962,6 +2377,58 @@ describe("bridge", () => {
         behavior: "deny",
         toolUseID: "tool-escalation",
       });
+
+      const cachedRequestOptions = {
+        blockedPath: "/tmp/outside",
+        requestId: "control-request-cached",
+        signal: new AbortController().signal,
+        toolUseID: "tool-cached-grant",
+      };
+      await expect(
+        getLastCanUseTool()(
+          "Read",
+          { file_path: "/tmp/outside/notes.txt" },
+          cachedRequestOptions,
+        ),
+      ).resolves.toMatchObject({ behavior: "allow" });
+      bridge.sendRequest(
+        10,
+        "turn/start",
+        canonicalTurnParams({
+          threadId,
+          input: [{ type: "text", text: "change permission roots" }],
+          providerOptions: {
+            additionalWorkspaceWriteRoots: ["/tmp/shared-worktree"],
+          },
+        }),
+      );
+      await readNextPrompt(getLatestQueryCall());
+      await bridge.waitForResponse(10);
+      expect(queries).toHaveLength(1);
+      const afterChange = getLastCanUseTool()(
+        "Read",
+        { file_path: "/tmp/outside/notes.txt" },
+        cachedRequestOptions,
+      );
+      const renewedRequest = await waitForBridgeRequest(
+        bridge,
+        (message) =>
+          isApprovalInteraction(message) &&
+          message.id !== pathRequest.id &&
+          message.id !== escalationRequest.id,
+      );
+      if (renewedRequest?.id === undefined)
+        throw new Error(
+          "Expected a fresh permission request after the live change",
+        );
+      handleLine(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: renewedRequest.id,
+          result: { decision: "deny", grantedPermissions: null },
+        }),
+      );
+      await expect(afterChange).resolves.toMatchObject({ behavior: "deny" });
 
       await stopBridgeThread({ bridge, queries, threadId });
     } finally {
@@ -2078,9 +2545,7 @@ describe("bridge", () => {
         signal: new AbortController().signal,
         toolUseID,
       });
-      await bridge.flushWork();
-
-      const approvalRequest = bridge.messages.find((message) =>
+      const approvalRequest = await waitForBridgeRequest(bridge, (message) =>
         isApprovalInteraction(message),
       );
       if (approvalRequest?.id === undefined) {
@@ -2122,136 +2587,221 @@ describe("bridge", () => {
     { mode: "full", nativeMode: "bypassPermissions" },
     { mode: "auto", nativeMode: "auto" },
     { mode: "accept-edits", nativeMode: "acceptEdits" },
-  ] as const)("prepares the $mode sandbox before approving a changed Plan preset", async ({ mode, nativeMode }) => {
-    const full = mode === "full";
-    const bridge = createBridgeJsonRpcTestHarness(handleLine);
-    const queries: ControlledClaudeQuery[] = [];
-    queryMock.mockImplementation(() => {
-      const query = createControlledClaudeQuery();
-      queries.push(query);
-      return query;
-    });
+    { mode: "full", nativeMode: "bypassPermissions", samePreset: true },
+    { mode: "auto", nativeMode: "auto", samePreset: true },
+    { mode: "accept-edits", nativeMode: "acceptEdits", samePreset: true },
+    { mode: "accept-edits", nativeMode: "acceptEdits", refuse: true },
+  ] as const)(
+    "prepares the $mode sandbox before approving a Plan preset ($samePreset, $refuse)",
+    async (testCase) => {
+      const { mode, nativeMode } = testCase;
+      const samePreset = "samePreset" in testCase;
+      const refuse = "refuse" in testCase;
+      const full = mode === "full";
+      const bridge = createBridgeJsonRpcTestHarness(handleLine);
+      const queries: ControlledClaudeQuery[] = [];
+      queryMock.mockImplementation(() => {
+        const query = createControlledClaudeQuery();
+        queries.push(query);
+        return query;
+      });
 
-    try {
-      const threadId = `thread-plan-restores-${mode}`;
-      bridge.sendRequest(1, "thread/start", {
-        threadId,
-        cwd: "/tmp/worktree",
-        instructionMode: "append",
-        options: {
-          permissionMode: full ? "auto" : "full",
-          permissionScope: full ? "workspace" : "full",
-          approvalReviewer: full ? "automatic" : null,
-          permissionEscalation: full ? "ask" : null,
-          instructions: "test",
+      try {
+        const threadId = `thread-plan-restores-${mode}`;
+        bridge.sendRequest(1, "thread/start", {
+          threadId,
+          cwd: "/tmp/worktree",
+          instructionMode: "append",
+          options: {
+            permissionMode: samePreset ? mode : full ? "auto" : "full",
+            permissionScope: samePreset
+              ? full
+                ? "full"
+                : "workspace"
+              : full
+                ? "workspace"
+                : "full",
+            approvalReviewer: samePreset
+              ? full
+                ? null
+                : mode === "auto"
+                  ? "automatic"
+                  : "user"
+              : full
+                ? "automatic"
+                : null,
+            permissionEscalation: samePreset
+              ? full
+                ? null
+                : "ask"
+              : full
+                ? "ask"
+                : null,
+            instructions: "test",
+            providerOptions: {
+              workflowsEnabled: false,
+              claudeCodePermissionMode: "plan",
+              sandboxEnabled: true,
+              additionalWorkspaceWriteRoots: ["/tmp/shared-worktree"],
+            },
+          },
+        });
+        await bridge.waitForResponse(1);
+
+        const options = {
+          ...canonicalOptions(),
+          permissionMode: mode,
+          permissionScope: full ? "full" : "workspace",
+          approvalReviewer: full
+            ? null
+            : mode === "auto"
+              ? "automatic"
+              : "user",
+          permissionEscalation: full ? null : "ask",
           providerOptions: {
             workflowsEnabled: false,
-            claudeCodePermissionMode: "plan",
+            sandboxEnabled: true,
+            additionalWorkspaceWriteRoots: ["/tmp/shared-worktree"],
           },
-        },
-      });
-      await bridge.waitForResponse(1);
-
-      const options = {
-        ...canonicalOptions(),
-        permissionMode: mode,
-        permissionScope: full ? "full" : "workspace",
-        approvalReviewer: full ? null : mode === "auto" ? "automatic" : "user",
-        permissionEscalation: full ? null : "ask",
-        providerOptions: {
-          workflowsEnabled: false,
-          sandboxEnabled: true,
-          additionalWorkspaceWriteRoots: ["/tmp/shared-worktree"],
-        },
-      };
-      bridge.sendRequest(10, "turn/start", {
-        ...canonicalTurnParams({
-          threadId,
-          input: [{ type: "text", text: "Continue planning with the new permission preset after approval" }],
-        }),
-        options,
-      });
-      await bridge.flushWork();
-      expect(getLatestQueryOptions().permissionMode).toBe("plan");
-      if (full) {
-        expect(getLatestQueryOptions().allowDangerouslySkipPermissions).toBe(true);
-        expect(getLatestQueryOptions()).not.toHaveProperty("sandbox");
-      } else {
-        expect(getLatestQueryOptions()).not.toHaveProperty("allowDangerouslySkipPermissions");
-        expect(getLatestQueryOptions()).toMatchObject({
-          sandbox: {
-            enabled: true,
-            filesystem: { allowWrite: ["/tmp/shared-worktree"] },
-          },
-          additionalDirectories: ["/tmp/shared-worktree"],
+        };
+        bridge.sendRequest(10, "turn/start", {
+          ...canonicalTurnParams({
+            threadId,
+            input: [
+              {
+                type: "text",
+                text: "Continue planning with the new permission preset after approval",
+              },
+            ],
+          }),
+          options,
         });
-      }
-      await readNextPrompt(getLatestQueryCall());
-      await bridge.waitForResponse(10);
-
-      const canUseTool = getLastCanUseTool();
-      const planPromise = canUseTool(
-        "ExitPlanMode",
-        { plan: "# Plan" },
-        {
-          requestId: "control-request",
-          signal: new AbortController().signal,
-          toolUseID: "tool-plan",
-        },
-      );
-      await bridge.flushWork();
-      const approvalRequest = bridge.messages.find((message) =>
-        isApprovalInteraction(message),
-      );
-      if (approvalRequest?.id === undefined) {
-        throw new Error("Expected ExitPlanMode to request user approval");
-      }
-
-      handleLine(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: approvalRequest.id,
-          result: { decision: "allow_once", grantedPermissions: null },
-        }),
-      );
-      await expect(planPromise).resolves.toMatchObject({ behavior: "allow" });
-      await bridge.flushWork();
-
-      expect(queries.at(-1)?.setPermissionMode).toHaveBeenLastCalledWith(
-        nativeMode,
-      );
-      expect(queries).toHaveLength(2);
-
-      if (!full) {
-        for (const [id, sandboxEnabled] of [[11, false], [12, true]] as const) {
-          bridge.sendRequest(id, "turn/start", {
-            ...canonicalTurnParams({ threadId, input: [{ type: "text", text: "Update sandbox after approval" }] }),
-            options: {
-              ...options,
-              providerOptions: { ...options.providerOptions, sandboxEnabled },
-            },
-          });
-          await bridge.flushWork();
-          expect(getLatestQueryOptions().permissionMode).toBe(nativeMode);
-          if (sandboxEnabled) {
-            expect(getLatestQueryOptions().sandbox).toMatchObject({
-              enabled: true,
-              filesystem: { allowWrite: ["/tmp/shared-worktree"] },
+        await bridge.flushWork();
+        expect(getLatestQueryOptions().permissionMode).toBe("plan");
+        if (full) {
+          expect(getLatestQueryOptions().allowDangerouslySkipPermissions).toBe(
+            true,
+          );
+          expect(getLatestQueryOptions()).not.toHaveProperty("sandbox");
+        } else {
+          if (samePreset) {
+            expect(getLatestQueryOptions()).toMatchObject({
+              sandbox: {
+                enabled: true,
+                filesystem: { allowWrite: ["/tmp/shared-worktree"] },
+              },
+              additionalDirectories: ["/tmp/shared-worktree"],
             });
-          } else {
-            expect(getLatestQueryOptions()).not.toHaveProperty("sandbox");
-          }
-          await readNextPrompt(getLatestQueryCall());
-          await bridge.waitForResponse(id);
+          } else
+            expect(queries[0]?.applyFlagSettings).toHaveBeenLastCalledWith({
+              sandbox: expect.objectContaining({
+                enabled: true,
+                filesystem: { allowWrite: ["/tmp/shared-worktree"] },
+              }),
+              permissions: { additionalDirectories: ["/tmp/shared-worktree"] },
+            });
+          expect(queries[0]?.setPermissionMode).not.toHaveBeenCalled();
         }
-      }
+        await readNextPrompt(getLatestQueryCall());
+        await bridge.waitForResponse(10);
 
-      await stopBridgeThread({ bridge, queries: queries.slice(-1), threadId });
-    } finally {
-      queries.forEach((query) => query.finish());
-      bridge.restore();
-    }
-  });
+        const canUseTool = getLastCanUseTool();
+        const planPromise = canUseTool(
+          "ExitPlanMode",
+          { plan: "# Plan" },
+          {
+            requestId: "control-request",
+            signal: new AbortController().signal,
+            toolUseID: "tool-plan",
+          },
+        );
+        const approvalRequest = await waitForBridgeRequest(bridge, (message) =>
+          isApprovalInteraction(message),
+        );
+        if (approvalRequest?.id === undefined) {
+          throw new Error("Expected ExitPlanMode to request user approval");
+        }
+
+        if (refuse)
+          queries
+            .at(-1)
+            ?.setPermissionMode.mockRejectedValueOnce(
+              new Error("disabled by settings or configuration"),
+            );
+        handleLine(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: approvalRequest.id,
+            result: { decision: "allow_once", grantedPermissions: null },
+          }),
+        );
+        await expect(planPromise).resolves.toMatchObject({ behavior: "allow" });
+        await bridge.flushWork();
+        if (refuse) {
+          expect(assembleCapturedThreadEvents(bridge.messages)).toContainEqual(
+            expect.objectContaining({
+              type: "provider/error",
+              message: expect.stringContaining("Failed to leave Plan mode"),
+            }),
+          );
+          await stopBridgeThread({
+            bridge,
+            queries: queries.slice(-1),
+            threadId,
+          });
+          return;
+        }
+        await bridge.flushWork();
+
+        expect(queries.at(-1)?.setPermissionMode).toHaveBeenLastCalledWith(
+          nativeMode,
+        );
+        expect(queries).toHaveLength(full && !samePreset ? 2 : 1);
+
+        if (!full) {
+          for (const [id, sandboxEnabled] of [
+            [11, false],
+            [12, true],
+          ] as const) {
+            bridge.sendRequest(id, "turn/start", {
+              ...canonicalTurnParams({
+                threadId,
+                input: [
+                  { type: "text", text: "Update sandbox after approval" },
+                ],
+              }),
+              options: {
+                ...options,
+                providerOptions: { ...options.providerOptions, sandboxEnabled },
+              },
+            });
+            await bridge.flushWork();
+            expect(queries[0]?.applyFlagSettings).toHaveBeenLastCalledWith({
+              sandbox: sandboxEnabled
+                ? expect.objectContaining({
+                    enabled: true,
+                    filesystem: { allowWrite: ["/tmp/shared-worktree"] },
+                  })
+                : { enabled: false },
+              permissions: { additionalDirectories: ["/tmp/shared-worktree"] },
+            });
+            expect(queries).toHaveLength(1);
+            await readNextPrompt(getLatestQueryCall());
+            await bridge.waitForResponse(id);
+          }
+        }
+
+        await stopBridgeThread({
+          bridge,
+          queries: queries.slice(-1),
+          threadId,
+        });
+      } finally {
+        queries.forEach((query) => query.finish());
+        bridge.restore();
+      }
+    },
+  );
 
   it("translates tagged dollar skill mentions without changing plain dollar text", async () => {
     const bridge = createBridgeJsonRpcTestHarness(handleLine);
@@ -2369,8 +2919,7 @@ describe("bridge", () => {
           toolUseID: "tool-plan",
         },
       );
-      await bridge.flushWork();
-      const approvalRequest = bridge.messages.find((message) =>
+      const approvalRequest = await waitForBridgeRequest(bridge, (message) =>
         isApprovalInteraction(message),
       );
       if (approvalRequest?.id === undefined) {
@@ -2465,8 +3014,7 @@ describe("bridge", () => {
           toolUseID: "tool-plan",
         },
       );
-      await bridge.flushWork();
-      const approvalRequest = bridge.messages.find((message) =>
+      const approvalRequest = await waitForBridgeRequest(bridge, (message) =>
         isApprovalInteraction(message),
       );
       if (approvalRequest?.id === undefined) {
@@ -2905,12 +3453,20 @@ describe("bridge", () => {
       "sonnet",
     ]);
     expect(queryMock).toHaveBeenCalledWith({
-      prompt: ".",
+      prompt: expect.anything(),
       options: expect.objectContaining({
-        maxTurns: 0,
         pathToClaudeCodeExecutable: executablePath,
         persistSession: false,
       }),
+    });
+    const probePrompt: AsyncIterable<SDKUserMessage> | undefined =
+      queryMock.mock.calls.at(-1)?.[0]?.prompt;
+    if (probePrompt === undefined) {
+      throw new Error("Expected the model probe prompt");
+    }
+    await expect(probePrompt[Symbol.asyncIterator]().next()).resolves.toEqual({
+      done: true,
+      value: undefined,
     });
     const probeOptions = queryMock.mock.calls.at(-1)?.[0]?.options;
     expect(probeOptions).not.toHaveProperty("allowDangerouslySkipPermissions");
@@ -3513,7 +4069,7 @@ describe("bridge", () => {
     }
   });
 
-  it.each(["chromeEnabled", "disable1MContext"])(
+  it.each(["chromeEnabled", "disable1MContext", "artifactsEnabled"])(
     "restarts the Claude process before the next turn when %s changes",
     async (setting) => {
       const bridge = createBridgeJsonRpcTestHarness(handleLine);
@@ -3545,6 +4101,8 @@ describe("bridge", () => {
             chrome: null,
             "replay-user-messages": null,
           });
+        } else if (setting === "artifactsEnabled") {
+          expect(getLatestQueryOptions().env?.CLAUDE_CODE_ARTIFACT).toBe("1");
         } else {
           expect(
             getLatestQueryOptions().env?.CLAUDE_CODE_DISABLE_1M_CONTEXT,
@@ -3587,6 +4145,9 @@ describe("bridge", () => {
         expect(
           getLatestQueryOptions().env?.CLAUDE_CODE_DISABLE_1M_CONTEXT,
         ).toBe("0");
+        expect(getLatestQueryOptions().env).not.toHaveProperty(
+          "CLAUDE_CODE_ARTIFACT",
+        );
         await expect(readNextPromptText(getLatestQueryCall())).resolves.toBe(
           "setting turned off",
         );
@@ -3657,7 +4218,11 @@ describe("bridge", () => {
         expect(getLatestQueryOptions().permissionMode).toBe("auto");
 
         bridge.sendRequest(2, "turn/start", {
-          ...canonicalTurnParams({ threadId, providerThreadId, input: [{ type: "text", text: "first" }] }),
+          ...canonicalTurnParams({
+            threadId,
+            providerThreadId,
+            input: [{ type: "text", text: "first" }],
+          }),
           options: options(false),
         });
         await readNextPrompt(getLatestQueryCall());
@@ -3667,7 +4232,31 @@ describe("bridge", () => {
           await bridge.flushWork();
         }
 
-        for (const [id, full] of [[3, true], [4, false]] as const) {
+        bridge.sendRequest(20, method, {
+          ...canonicalTurnParams({
+            threadId,
+            providerThreadId,
+            expectedTurnId: "active-turn",
+            input: [{ type: "text", text: "update roots before full" }],
+          }),
+          options: {
+            ...options(false),
+            providerOptions: {
+              workflowsEnabled: false,
+              sandboxEnabled: true,
+              additionalWorkspaceWriteRoots: ["/tmp/other-worktree"],
+            },
+          },
+        });
+        await readNextPrompt(getLatestQueryCall());
+        await bridge.waitForResponse(20);
+        expect(queries).toHaveLength(1);
+
+        for (const [id, full] of [
+          [3, true],
+          [4, false],
+          [5, true],
+        ] as const) {
           bridge.sendRequest(id, method, {
             ...canonicalTurnParams({
               threadId,
@@ -3678,29 +4267,80 @@ describe("bridge", () => {
             options: options(full),
           });
           await bridge.flushWork();
-          expect(queries).toHaveLength(id - 1);
-          expect(queries[id - 3]?.close).toHaveBeenCalled();
+          expect(queries).toHaveLength(2);
+          expect(queries[0]?.close).toHaveBeenCalledTimes(1);
+          expect(queries[1]?.close).not.toHaveBeenCalled();
+          expect(queries[1]?.interrupt).not.toHaveBeenCalled();
           expect(getLatestQueryOptions()).toMatchObject({
             resume: providerThreadId,
-            permissionMode: full ? "bypassPermissions" : "auto",
+            allowDangerouslySkipPermissions: true,
           });
-          if (full) {
-            expect(getLatestQueryOptions().allowDangerouslySkipPermissions).toBe(true);
+          if (id === 3) {
+            expect(getLatestQueryOptions().permissionMode).toBe(
+              "bypassPermissions",
+            );
             expect(getLatestQueryOptions()).not.toHaveProperty("sandbox");
+            expect(getLatestQueryOptions().settings).toMatchObject({
+              sandbox: { enabled: false },
+              permissions: { additionalDirectories: [] },
+            });
           } else {
-            expect(getLatestQueryOptions()).not.toHaveProperty("allowDangerouslySkipPermissions");
-            expect(getLatestQueryOptions().sandbox).toMatchObject({
-              enabled: true,
-              filesystem: { allowWrite: ["/tmp/shared-worktree"] },
+            expect(queries[1]?.setPermissionMode).toHaveBeenLastCalledWith(
+              full ? "bypassPermissions" : "auto",
+            );
+            expect(queries[1]?.applyFlagSettings).toHaveBeenLastCalledWith({
+              sandbox: full
+                ? { enabled: false }
+                : expect.objectContaining({
+                    enabled: true,
+                    filesystem: { allowWrite: ["/tmp/shared-worktree"] },
+                  }),
+              permissions: {
+                additionalDirectories: full ? [] : ["/tmp/shared-worktree"],
+              },
             });
           }
-          await expect(readNextPromptText(getLatestQueryCall())).resolves.toBe(`permissions ${id}`);
+          await expect(readNextPromptText(getLatestQueryCall())).resolves.toBe(
+            `permissions ${id}`,
+          );
           await bridge.waitForResponse(id);
           if (method === "turn/start") {
-            queries.at(-1)?.emit(createSuccessfulResultMessage(providerThreadId));
+            queries
+              .at(-1)
+              ?.emit(createSuccessfulResultMessage(providerThreadId));
             await bridge.flushWork();
           }
         }
+        queries[1]?.setPermissionMode.mockRejectedValueOnce(
+          new Error("permission mode refused"),
+        );
+        bridge.sendRequest(6, method, {
+          ...canonicalTurnParams({
+            threadId,
+            providerThreadId,
+            expectedTurnId: "active-turn",
+            input: [{ type: "text", text: "refused input" }],
+          }),
+          options: options(false),
+        });
+        expect(await bridge.waitForResponse(6)).toMatchObject({
+          error: { message: "permission mode refused" },
+        });
+        bridge.sendRequest(7, method, {
+          ...canonicalTurnParams({
+            threadId,
+            providerThreadId,
+            expectedTurnId: "active-turn",
+            input: [{ type: "text", text: "retry input" }],
+          }),
+          options: options(false),
+        });
+        await expect(readNextPromptText(getLatestQueryCall())).resolves.toBe(
+          "retry input",
+        );
+        await bridge.waitForResponse(7);
+        expect(queries).toHaveLength(2);
+        expect(queries[1]?.setPermissionMode).toHaveBeenLastCalledWith("auto");
       } finally {
         queries.forEach((query) => query.finish());
         bridge.restore();
@@ -3708,7 +4348,7 @@ describe("bridge", () => {
     },
   );
 
-  it("restarts the Claude process before the next turn when the sandbox setting changes", async () => {
+  it("applies sandbox changes live without replacing the Claude process", async () => {
     const bridge = createBridgeJsonRpcTestHarness(handleLine);
     const queries: ControlledClaudeQuery[] = [];
     queryMock.mockImplementation(() => {
@@ -3762,12 +4402,14 @@ describe("bridge", () => {
         }),
       );
       await bridge.flushWork();
-      expect(queries).toHaveLength(2);
-      expect(queries[0]?.close).toHaveBeenCalled();
-      expect(getLatestQueryOptions()).toMatchObject({
-        permissionMode: "acceptEdits",
-        resume: threadId,
-        sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
+      expect(queries).toHaveLength(1);
+      expect(queries[0]?.close).not.toHaveBeenCalled();
+      expect(queries[0]?.applyFlagSettings).toHaveBeenLastCalledWith({
+        sandbox: expect.objectContaining({
+          enabled: true,
+          autoAllowBashIfSandboxed: true,
+        }),
+        permissions: { additionalDirectories: [] },
       });
       await expect(readNextPromptText(getLatestQueryCall())).resolves.toBe(
         "sandbox turned on",
@@ -3777,15 +4419,7 @@ describe("bridge", () => {
         bridge.messages.filter(
           (message) => message.method === "session/replaced",
         ),
-      ).toContainEqual(
-        expect.objectContaining({
-          params: expect.objectContaining({
-            contextLost: false,
-            providerThreadId: threadId,
-            threadId,
-          }),
-        }),
-      );
+      ).toHaveLength(0);
     } finally {
       bridge.sendRequest(4, "thread/stop", {
         threadId,
@@ -4166,9 +4800,8 @@ describe("bridge", () => {
           toolUseID: askToolUseId,
         },
       );
-      await bridge.flushWork();
-
-      const permissionRequest = bridge.messages.find(
+      const permissionRequest = await waitForBridgeRequest(
+        bridge,
         (message) =>
           isApprovalInteraction(message) &&
           isRecord(interactionPayload(message)?.subject) &&
@@ -5352,7 +5985,7 @@ describe("canonical model context-window hint", () => {
         options: {
           ...canonicalOptions,
           envVars: { PLUGIN_ACCESS_TOKEN: "first" },
-          providerOptions: { disable1MContext: true },
+          providerOptions: { disable1MContext: true, artifactsEnabled: true },
         },
       });
       const startResponse = await bridge.waitForResponse(1);
@@ -5376,6 +6009,7 @@ describe("canonical model context-window hint", () => {
         env: {
           PLUGIN_ACCESS_TOKEN: "second",
           CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+          CLAUDE_CODE_ARTIFACT: "1",
         },
         resume: providerThreadId,
       });

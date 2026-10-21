@@ -19,6 +19,12 @@ function arms(selector: string): string {
   return `${descendantArms(selector)},${SELF}${selector}`;
 }
 
+function rules(selector: string, body: string, includeSelf = true): string {
+  const selectors = ANCESTORS.map((ancestor) => `${ancestor} ${selector}`);
+  if (includeSelf) selectors.push(`${SELF}${selector}`);
+  return selectors.map((scoped) => `${scoped}{${body}}`).join("");
+}
+
 function scopeUtilities(utilities: string): string {
   return scopePluginUtilities(`@layer utilities{${utilities}}`, ROOTS);
 }
@@ -26,18 +32,16 @@ function scopeUtilities(utilities: string): string {
 describe("scopePluginUtilities", () => {
   it("emits one descendant arm per scope root and a self arm per selector", () => {
     expect(scopeUtilities(".flex-col{flex-direction:column}")).toBe(
-      `@layer utilities{${arms(".flex-col")}{flex-direction:column}}`,
+      `@layer utilities{${rules(".flex-col", "flex-direction:column")}}`,
     );
   });
 
   it("gives each descendant arm a single-root :where() so the ancestor filter can reject it", () => {
     const scoped = scopeUtilities(".flex-col{flex-direction:column}");
-    const selectors = scoped.slice(
-      "@layer utilities{".length,
-      scoped.indexOf("{", "@layer utilities{".length),
-    );
-    const descendant = selectors
-      .split(/,(?=:where\()/)
+    const descendant = [
+      ...scoped.matchAll(/([^{}]+)\{flex-direction:column\}/g),
+    ]
+      .map((match) => match[1])
       .filter((selector) => selector.includes(") ."));
     expect(descendant).toEqual([
       ':where([data-bb-plugin="demo"]) .flex-col',
@@ -51,52 +55,60 @@ describe("scopePluginUtilities", () => {
     );
   });
 
+  it("preserves nesting specificity when the original selector list has different specificities", () => {
+    expect(scopeUtilities(".a,#b{&:hover{color:red}}")).toBe(
+      `@layer utilities{${arms(".a")},${arms("#b")}{&:hover{color:red}}}`,
+    );
+  });
+
   it("keeps commas inside :is()/:not() out of the selector split", () => {
     const scoped = scopeUtilities(":is(.a,.b) > .c{color:red}");
     expect(scoped).toBe(
-      `@layer utilities{${arms(":is(.a,.b) > .c")}{color:red}}`,
+      `@layer utilities{${rules(":is(.a,.b) > .c", "color:red")}}`,
     );
   });
 
   it("scopes a :where()-wrapped child combinator from outside, where every root has an ancestor hash", () => {
     const spaceY = ":where(.space-y-2>:not(:last-child))";
     expect(scopeUtilities(`${spaceY}{margin-top:1rem}`)).toBe(
-      `@layer utilities{${descendantArms(spaceY)}{margin-top:1rem}}`,
+      `@layer utilities{${rules(spaceY, "margin-top:1rem", false)}}`,
     );
   });
 
   it("scopes inside a :where()-wrapped descendant combinator so a host ancestor cannot satisfy it", () => {
     expect(scopeUtilities(":where(.a .b){color:red}")).toBe(
       "@layer utilities{" +
-        ANCESTORS.map((ancestor) => `:where(${ancestor} .a .b)`).join(",") +
-        `,:where(${SELF}.a .b){color:red}}`,
+        ANCESTORS.map(
+          (ancestor) => `:where(${ancestor} .a .b){color:red}`,
+        ).join("") +
+        `:where(${SELF}.a .b){color:red}}`,
     );
   });
 
   it("drops the self arm for sibling combinators so a portal root cannot reach host siblings", () => {
     const hidden = String.raw`.\[\&\~\*\]\:hidden`;
     expect(scopeUtilities(`${hidden}{&~*{display:none}}`)).toBe(
-      `@layer utilities{${descendantArms(hidden)}{&~*{display:none}}}`,
+      `@layer utilities{${rules(hidden, "&~*{display:none}", false)}}`,
     );
     expect(scopeUtilities(`${hidden} ~ *{display:none}`)).toBe(
-      `@layer utilities{${descendantArms(`${hidden} ~ *`)}{display:none}}`,
+      `@layer utilities{${rules(`${hidden} ~ *`, "display:none", false)}}`,
     );
     expect(scopeUtilities(".a{+ .b{color:red}}")).toBe(
-      `@layer utilities{${descendantArms(".a")}{+ .b{color:red}}}`,
+      `@layer utilities{${rules(".a", "+ .b{color:red}", false)}}`,
     );
     expect(
       scopeUtilities(".a{@media (hover:hover){&:hover + .b{color:red}}}"),
     ).toBe(
-      `@layer utilities{${descendantArms(".a")}{@media (hover:hover){&:hover + .b{color:red}}}}`,
+      `@layer utilities{${rules(".a", "@media (hover:hover){&:hover + .b{color:red}}", false)}}`,
     );
   });
 
   it("keeps both arms when a sibling combinator precedes & so the subject stays on the element", () => {
     expect(scopeUtilities(".x{.a ~ &{color:red}}")).toBe(
-      `@layer utilities{${arms(".x")}{.a ~ &{color:red}}}`,
+      `@layer utilities{${rules(".x", ".a ~ &{color:red}")}}`,
     );
     expect(scopeUtilities(".x{&:hover{color:red}}")).toBe(
-      `@layer utilities{${arms(".x")}{&:hover{color:red}}}`,
+      `@layer utilities{${rules(".x", "&:hover{color:red}")}}`,
     );
   });
 
@@ -116,7 +128,7 @@ describe("scopePluginUtilities", () => {
   it("survives escaped class names and braces inside strings", () => {
     const scoped = scopeUtilities(String.raw`.w-\[50\%\]{content:"}"}`);
     expect(scoped).toBe(
-      `@layer utilities{${arms(String.raw`.w-\[50\%\]`)}{content:"}"}}`,
+      `@layer utilities{${rules(String.raw`.w-\[50\%\]`, 'content:"}"')}}`,
     );
   });
 
@@ -125,7 +137,7 @@ describe("scopePluginUtilities", () => {
       "@media (min-width:40rem){.md-flex{display:flex}}",
     );
     expect(scoped).toBe(
-      `@layer utilities{@media (min-width:40rem){${arms(".md-flex")}{display:flex}}}`,
+      `@layer utilities{@media (min-width:40rem){${rules(".md-flex", "display:flex")}}}`,
     );
   });
 
@@ -152,6 +164,14 @@ describe("scopePluginUtilities", () => {
     expect(scoped).toContain(`${SELF}.scale-x-50`);
   });
 
+  it("preserves the license banner in readable optimized CSS", () => {
+    const banner =
+      "/*! tailwindcss v4.3.0 | MIT License | https://tailwindcss.com */";
+    expect(
+      scopePluginUtilities(`${banner}@layer utilities{.a{color:red}}`, ROOTS),
+    ).toBe(`${banner}@layer utilities{${rules(".a", "color:red")}}`);
+  });
+
   it("accepts a build with no utilities layer", () => {
     expect(scopePluginUtilities("@layer theme{:root{--a:1}}", ROOTS)).toBe(
       "@layer theme{:root{--a:1}}",
@@ -175,7 +195,7 @@ describe("scopePluginUtilities", () => {
       ROOTS,
     );
     expect(scoped).toBe(
-      `${banner}\n@layer theme{:root{--a:1}}@layer utilities{${arms(".a")}{color:red}}`,
+      `${banner}\n@layer theme{:root{--a:1}}@layer utilities{${rules(".a", "color:red")}}`,
     );
   });
 

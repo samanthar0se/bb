@@ -36,6 +36,7 @@ function lenientOptionsByEntity(): Map<string, LenientChangedOption> {
 const maximalThreadMetadata: ThreadChangeMetadata = {
   backgroundActivityChanged: true,
   eventTypes: [...threadEventTypeValues],
+  timelineSequence: 42,
   hasPendingInteraction: true,
   projectId: "proj_1",
   statusChange: {
@@ -83,6 +84,13 @@ const maximalChangedMessages: ChangedMessage[] = [
     type: "changed",
     entity: "system",
     changes: [...SYSTEM_CHANGE_KINDS],
+  },
+  { type: "changed", entity: "tags", tags: ["ui-preferences"] },
+  {
+    type: "changed",
+    entity: "plugin",
+    pluginId: "push-notifications",
+    tags: null,
   },
 ];
 

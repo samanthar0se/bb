@@ -1,4 +1,5 @@
 import * as questionFormHost from "@bb/shared-ui/question-form-host";
+import * as voiceInputTextarea from "@bb/shared-ui/voice-input-textarea";
 import * as react from "react";
 import * as reactDom from "react-dom";
 import * as reactDomClient from "react-dom/client";
@@ -15,6 +16,7 @@ import * as radixPopover from "@radix-ui/react-popover";
 import * as radixSelect from "@radix-ui/react-select";
 import * as radixTooltip from "@radix-ui/react-tooltip";
 import * as sonner from "sonner";
+import { whenToasterSettled } from "@/components/ui/app-toast-runtime";
 import * as vaul from "vaul";
 import * as pierreDiffs from "@pierre/diffs";
 import * as clsx from "clsx";
@@ -31,6 +33,7 @@ import { appQueryClient } from "./app-query-client";
 import {
   setServerPluginsStarting,
   setPluginFrontendReconcilePending,
+  setPluginFrontendLoadFailed,
 } from "./plugin-frontend-boot-state";
 import type {
   PluginContentScriptDisposer,
@@ -53,6 +56,7 @@ import { pluginSdkAppImplementation } from "./plugin-sdk-app-impl";
 import {
   beginPluginSlotBatch,
   removePluginSlotRegistrations,
+  setBuiltinPluginIds,
   setPluginSlotRegistrations,
   type PluginRegistrationSet,
 } from "./plugin-slots";
@@ -130,20 +134,7 @@ interface PluginFrontendLoaderDeps {
   warn: (message: string) => void;
 }
 
-export async function loadPluginFrontends(
-  candidates: readonly PluginFrontendCandidate[],
-  deps: PluginFrontendLoaderDeps,
-): Promise<Map<string, PluginFrontendRecord>> {
-  const records = new Map<string, PluginFrontendRecord>();
-  await Promise.all(
-    candidates.map(async (candidate) => {
-      records.set(candidate.pluginId, await loadOneBundle(candidate, deps));
-    }),
-  );
-  return records;
-}
-
-async function loadOneBundle(
+export async function loadPluginFrontend(
   { pluginId, bundle }: PluginFrontendCandidate,
   deps: PluginFrontendLoaderDeps,
 ): Promise<PluginFrontendRecord> {
@@ -203,6 +194,7 @@ interface BbPluginRuntime {
   classVarianceAuthority: unknown;
   sharedUiIcon: unknown;
   questionFormHost: typeof questionFormHost;
+  voiceInputTextarea: typeof voiceInputTextarea;
 }
 
 type RuntimeHost = typeof globalThis & { __bbPluginRuntime?: BbPluginRuntime };
@@ -236,6 +228,7 @@ export function installPluginRuntime(): void {
     classVarianceAuthority,
     sharedUiIcon,
     questionFormHost,
+    voiceInputTextarea,
   };
 }
 
@@ -290,6 +283,11 @@ export async function fetchFrontendCandidates(
   }
   setPluginLogoUrls(logoUrls);
   setPluginAssetIcons(assetIcons);
+  setBuiltinPluginIds(
+    plugins.flatMap((plugin) =>
+      plugin.provenance === "builtin" ? [plugin.id] : [],
+    ),
+  );
   return candidates;
 }
 
@@ -360,6 +358,7 @@ export function createPluginFrontendReconcileState(): PluginFrontendReconcileSta
 export interface PluginFrontendReconcileDeps {
   fetchCandidates: () => Promise<PluginFrontendCandidate[]>;
   importModule: (url: string) => Promise<unknown>;
+  importRetryDelaysMs: readonly number[];
   applyCss: (pluginId: string, url: string | null) => void | Promise<void>;
   retainCss: (pluginId: string) => () => void;
   resetCrashedSlots: (pluginId: string) => void;
@@ -669,29 +668,32 @@ async function reconcileCandidates(
       }
       deps.resetCrashedSlots(pluginId);
       const previousAttempt = state.failedImportAttempts.get(pluginId);
-      const retryCount =
+      let retryCount =
         previous?.status === "failed" &&
         previousAttempt?.hash === candidate.bundle.hash
           ? previousAttempt.count + 1
           : 0;
-      const importUrl =
-        retryCount === 0
-          ? candidate.bundle.jsUrl
-          : appendPluginImportRetry(candidate.bundle.jsUrl, retryCount);
-      const loaded = await loadPluginFrontends(
-        [
+      const importAttempt = () =>
+        loadPluginFrontend(
           {
             ...candidate,
-            bundle: { ...candidate.bundle, jsUrl: importUrl },
+            bundle: {
+              ...candidate.bundle,
+              jsUrl:
+                retryCount === 0
+                  ? candidate.bundle.jsUrl
+                  : appendPluginImportRetry(candidate.bundle.jsUrl, retryCount),
+            },
           },
-        ],
-        {
-          importModule: deps.importModule,
-          warn: deps.warn,
-        },
-      );
-      const record = loaded.get(pluginId);
-      if (record === undefined) return;
+          { importModule: deps.importModule, warn: deps.warn },
+        );
+      let record = await importAttempt();
+      for (const delayMs of deps.importRetryDelaysMs) {
+        if (record.status !== "failed" || state.tornDown) break;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        retryCount += 1;
+        record = await importAttempt();
+      }
       if (record.status === "failed") {
         state.failedImportAttempts.set(pluginId, {
           hash: candidate.bundle.hash,
@@ -734,10 +736,8 @@ async function reconcileCandidates(
             "the bundle's default export is not definePluginApp(...) from @get-bb/plugin-sdk/app",
           );
         }
-        collected = collectPluginAppRegistrations(definition, (reason) => {
-          deps.warn(
-            `[plugin:${pluginId}] composer customization rejected: ${reason}`,
-          );
+        collected = collectPluginAppRegistrations(definition, (message) => {
+          deps.warn(`[plugin:${pluginId}] ${message}`);
         });
       } catch (error) {
         const message = errorMessage(error);
@@ -911,14 +911,19 @@ const browserDiagnosticsListeners = new Set<() => void>();
 
 function publishBrowserDiagnostics(): void {
   browserDiagnosticsSnapshot = new Map(state.diagnostics);
+  setPluginFrontendLoadFailed(
+    [...state.records.values()].some((record) => record.status !== "loaded"),
+  );
   for (const listener of browserDiagnosticsListeners) listener();
 }
 
 const PLUGIN_SLOT_BATCH_MAX_HOLD_MS = 150;
+const PLUGIN_FRONTEND_IMPORT_RETRY_DELAYS_MS = [500, 2_000];
 
 const browserReconcileDeps: PluginFrontendReconcileDeps = {
   fetchCandidates: fetchFrontendCandidates,
   importModule: (url) => import(/* @vite-ignore */ url),
+  importRetryDelaysMs: PLUGIN_FRONTEND_IMPORT_RETRY_DELAYS_MS,
   applyCss: applyPluginCss,
   retainCss: retainPluginCss,
   routePluginId: () => getPluginPanelRoutePluginId(window.location.pathname),
@@ -990,6 +995,7 @@ export function bootPluginFrontends(): Promise<void> {
   bootPromise ??= (async () => {
     installPluginRuntime();
     installPluginFrontendPageLifecycle();
+    await whenToasterSettled();
     await reconcilePluginFrontends(state, browserReconcileDeps);
   })().catch((error: unknown) => {
     console.warn(

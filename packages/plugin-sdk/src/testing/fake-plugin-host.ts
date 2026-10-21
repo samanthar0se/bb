@@ -1,3 +1,6 @@
+import { experimental_PluginRpcCallError } from "../rpc-contract.js";
+import { rpcInvalidationTags, rpcResponseTags } from "../internal/rpc-tags.js";
+import type { ContractTagDeclarations } from "@bb/domain";
 import {
   environmentCompositionSchema,
   validateServerAccessProviderDeclaration,
@@ -32,6 +35,7 @@ import {
   normalizePluginAgentConfiguration,
   normalizeRealtimePayload,
   normalizeRpcJsonResult,
+  readPluginRpcRefusal,
   normalizeRpcRegistration,
   publishRpcMethod,
   normalizeWebSocketRouteRegistration,
@@ -328,6 +332,7 @@ export interface FakePluginInspectionState {
   /** Every `bb.log` line, in order. */
   readonly logEntries: FakeLogEntry[];
   /** Every `bb.realtime.publish`, payload normalized like the wire. */
+  readonly experimental_rpcInvalidations: (readonly string[] | null)[];
   readonly realtimeSignals: FakeRealtimeSignal[];
   /** Every `bb.status.needsConfiguration` message, in order. */
   readonly needsConfigurationMessages: string[];
@@ -597,6 +602,7 @@ function jsonRoundTrip(value: unknown, what: string): unknown {
 }
 
 interface FakeRpcRecord {
+  declarations: ContractTagDeclarations<unknown, unknown>;
   publication: ReturnType<typeof publishRpcMethod>;
   inputSchema: StandardSchemaV1;
   outputSchema: StandardSchemaV1;
@@ -620,10 +626,7 @@ interface FakeHostSignalSubscription {
 }
 
 function throwRpcError(error: PluginRpcError): never {
-  const thrown = new Error(error.message);
-  Reflect.set(thrown, "code", error.code);
-  if (error.issues !== undefined) Reflect.set(thrown, "issues", error.issues);
-  throw thrown;
+  throw new experimental_PluginRpcCallError(error);
 }
 
 interface FakePluginPersistentState {
@@ -853,7 +856,16 @@ function createFakePluginHostInternal(
 
   // --- rpc ---
   const rpcHandlers = new Map<string, FakeRpcRecord>();
+  const rpcInvalidations: (readonly string[] | null)[] = [];
   const rpc: PluginRpc = {
+    experimental_invalidate(tags) {
+      assertLive();
+      rpcInvalidations.push(rpcInvalidationTags.parse(tags));
+    },
+    experimental_invalidateAll() {
+      assertLive();
+      rpcInvalidations.push(null);
+    },
     register(contract, handlers, registrationOptions) {
       assertLive();
       for (const [name, record] of normalizeRpcRegistration(
@@ -1127,8 +1139,10 @@ function createFakePluginHostInternal(
     [E in PluginThreadEventName]: Array<PluginThreadEventHandler<E>>;
   } = {
     "experimental_thread.events": [],
+    "experimental_thread.parentChanged": [],
     "experimental_terminal.input": [],
     "experimental_host.deleted": [],
+    "experimental_environment.removed": [],
     "thread.created": [],
     "thread.active": [],
     "thread.idle": [],
@@ -1597,6 +1611,7 @@ function createFakePluginHostInternal(
     },
     pluginId,
     logEntries,
+    experimental_rpcInvalidations: rpcInvalidations,
     realtimeSignals,
     needsConfigurationMessages,
     get recheckCount() {
@@ -1633,8 +1648,12 @@ function createFakePluginHostInternal(
         return {
           "experimental_thread.events":
             threadEventHandlers["experimental_thread.events"].length,
+          "experimental_thread.parentChanged":
+            threadEventHandlers["experimental_thread.parentChanged"].length,
           "experimental_terminal.input":
             threadEventHandlers["experimental_terminal.input"].length,
+          "experimental_environment.removed":
+            threadEventHandlers["experimental_environment.removed"].length,
           "experimental_host.deleted":
             threadEventHandlers["experimental_host.deleted"].length,
           "thread.created": threadEventHandlers["thread.created"].length,
@@ -1798,6 +1817,8 @@ function createFakePluginHostInternal(
           },
         });
       } catch (error) {
+        const refusal = readPluginRpcRefusal(error);
+        if (refusal !== null) return throwRpcError(refusal);
         return throwRpcError({
           code: "handler_error",
           message: errorMessage(error),
@@ -1809,7 +1830,14 @@ function createFakePluginHostInternal(
         "output",
         throwRpcError,
       );
-      return normalizeRpcJsonResult(validatedOutput, throwRpcError);
+      const jsonResult = normalizeRpcJsonResult(validatedOutput, throwRpcError);
+      const { invalidated } = rpcResponseTags(
+        record.declarations,
+        validatedInput,
+        validatedOutput,
+      );
+      if (invalidated.length > 0) rpc.experimental_invalidate(invalidated);
+      return jsonResult;
     },
 
     async runCli(argv, ctx = {}) {

@@ -34,6 +34,7 @@ import {
   getLastProviderThreadId,
   requireDispatchableProviderThreadId,
 } from "./thread-events.js";
+import { resolvePendingThreadSessionOptions } from "./thread-session-options.js";
 import type { ThreadForkDescriptor } from "./thread-startup-store.js";
 import {
   resolveThreadRuntimeCommandConfig,
@@ -228,11 +229,16 @@ function toRuntimeExecutionOptions(
       ...(promptMode !== undefined ? { promptMode } : {}),
       experimental_pluginMetadata: pluginMetadata,
     }) ?? {};
+  const sessionOptions = resolvePendingThreadSessionOptions(
+    args.deps.db,
+    args.threadId,
+  );
   const base = {
     model: args.execution.model,
     serviceTier: args.execution.serviceTier,
     reasoningLevel: args.execution.reasoningLevel,
     ...(promptMode !== undefined ? { promptMode } : {}),
+    ...(Object.keys(sessionOptions).length > 0 ? { sessionOptions } : {}),
     providerOptions,
   };
   if (permissionMode === "full") {

@@ -16,6 +16,7 @@ import {
   sql,
 } from "drizzle-orm";
 import {
+  getLatestThreadSequence,
   deleteThread,
   environments,
   events,
@@ -23,6 +24,7 @@ import {
   getHost,
   getLatestThreadInterruptedReason,
   getThread,
+  hasStoredTerminalClientTurnRequestEvent,
   listThreadIdsStoppedSinceLastTurnStart,
   listThreadIdsWithLatestHostDaemonRestartInterruption,
   listThreadTurnInterruptionEventStates,
@@ -547,6 +549,7 @@ function appendProvisioningInterruptedEventInTransaction(
     entries: [buildProvisioningStoppedEntry()],
   });
   deps.hub.notifyThread(thread.id, ["events-appended"], {
+    timelineSequence: getLatestThreadSequence(deps.db, { threadId: thread.id }),
     eventTypes: ["system/thread-provisioning"],
   });
 }
@@ -563,6 +566,9 @@ function appendThreadInterruptedEventIfMissingInTransaction(
     reason: args.reason,
   });
   deps.hub.notifyThread(args.threadId, ["events-appended"], {
+    timelineSequence: getLatestThreadSequence(deps.db, {
+      threadId: args.threadId,
+    }),
     eventTypes: ["system/thread/interrupted"],
   });
   return true;
@@ -585,6 +591,9 @@ function markThreadStoppingWithEventInTransaction(
     reason: args.reason,
   });
   deps.hub.notifyThread(args.threadId, ["events-appended"], {
+    timelineSequence: getLatestThreadSequence(deps.db, {
+      threadId: args.threadId,
+    }),
     eventTypes: ["system/thread/interrupted"],
   });
   return true;
@@ -678,31 +687,12 @@ function hasTerminalClientTurnRequestEvent(
   deps: ThreadCommandResultSettlementDeps,
   command: ThreadFailureCommand,
 ): boolean {
-  if (command.type !== "thread.start" && command.type !== "turn.submit") {
-    return false;
-  }
-
   return (
-    deps.db
-      .select({ id: events.id })
-      .from(events)
-      .where(
-        and(
-          eq(events.threadId, command.threadId),
-          or(
-            and(
-              eq(events.type, "turn/input/accepted"),
-              sql`json_extract(${events.data}, '$.clientRequestId') = ${command.requestId}`,
-            ),
-            and(
-              eq(events.type, "client/turn/rejected"),
-              sql`json_extract(${events.data}, '$.requestId') = ${command.requestId}`,
-            ),
-          ),
-        ),
-      )
-      .limit(1)
-      .get() !== undefined
+    (command.type === "thread.start" || command.type === "turn.submit") &&
+    hasStoredTerminalClientTurnRequestEvent(deps.db, {
+      requestId: command.requestId,
+      threadId: command.threadId,
+    })
   );
 }
 
@@ -893,7 +883,7 @@ function settleThreadCommandFailure(
   if (outcome.applied) {
     args.deps.hub.notifyThread(thread.id, ["status-changed"]);
   }
-  if (isParentNotifiableChildThread(thread)) {
+  if (isParentNotifiableChildThread(thread, "failed")) {
     const parentThreadId = thread.parentThreadId;
     postCommitActions.push({
       run: (deps) =>
@@ -1295,6 +1285,7 @@ function dispatchThreadStartFromRequest(
 
   if (result.completedProvisionSequence !== null) {
     deps.hub.notifyThread(args.threadId, ["events-appended"], {
+      timelineSequence: result.completedProvisionSequence,
       eventTypes: ["system/thread-provisioning"],
     });
   }
@@ -1778,6 +1769,9 @@ function interruptActiveTurnForThreadInTransaction(
     eventTypes.push("system/thread/interrupted");
   }
   deps.hub.notifyThread(args.threadId, ["events-appended", "status-changed"], {
+    timelineSequence: getLatestThreadSequence(deps.db, {
+      threadId: args.threadId,
+    }),
     eventTypes,
   });
 
@@ -1902,6 +1896,9 @@ function interruptActiveThreads(
       result.threadId,
       ["events-appended", "status-changed"],
       {
+        timelineSequence: getLatestThreadSequence(deps.db, {
+          threadId: result.threadId,
+        }),
         eventTypes,
         ...(thread ? buildThreadStatusChangeMetadata(deps, thread) : {}),
       },
@@ -1909,7 +1906,7 @@ function interruptActiveThreads(
     if (
       result.interruptedTurnId !== null &&
       thread &&
-      isParentNotifiableChildThread(thread)
+      isParentNotifiableChildThread(thread, "interrupted")
     ) {
       void queueChildThreadTurnNotificationBestEffort(deps, {
         childThread: thread,

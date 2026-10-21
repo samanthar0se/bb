@@ -3,6 +3,7 @@ import { serverAccess } from "../services/machines/server-access.js";
 import {
   getLatestSessionForHost,
   getNonDestroyedHost,
+  getPublicProjectByLocalPathSource,
   updateHost,
 } from "@bb/db";
 import {
@@ -50,6 +51,7 @@ import {
   startMachineResume,
   startMachineSuspension,
   startMachineReconciliation,
+  forceMachineRemoval,
   retryMachineCleanup,
   sweepProviderMachine,
 } from "../services/machines/provider-orchestration.js";
@@ -57,6 +59,10 @@ import { getMachineEnrollmentService } from "../services/machines/machine-servic
 import { manualHostCommand } from "../services/machines/manual-provider.js";
 import { prepareReconnect } from "../services/machines/reconnect.js";
 import { emitPluginHostDeleted } from "../services/plugins/plugin-thread-events.js";
+
+const DISCOVERED_REPOS_MAX_DEPTH = 5;
+const DISCOVERED_REPOS_SINCE_DAYS = 30;
+const DISCOVERED_REPOS_LIMIT = 10;
 
 const PROVIDER_CLI_INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 const FOLDER_PICKER_TIMEOUT_MS = 10 * 60 * 1000;
@@ -286,9 +292,13 @@ export function registerHostRoutes(
     return context.json({ ok: true as const });
   });
 
-  del(routes.delete, async (context) => {
+  del(routes.delete, async (context, query) => {
     assertHostManagementAllowed(context);
     const hostId = context.req.param("id");
+    if (query.force === "true") {
+      await forceMachineRemoval(deps, hostId);
+      return context.json({ ok: true as const });
+    }
     const host = requireMutableHost(deps, hostId);
     if (resolvePrimaryHostId(deps) === hostId) {
       throw new ApiError(
@@ -327,6 +337,33 @@ export function registerHostRoutes(
       );
     }
     return context.json({ ok: true });
+  });
+
+  get(routes.discoveredRepos, async (context) => {
+    const hostId = context.req.param("id");
+    assertUsableHostId(deps, { hostId });
+    const result = await callHostRetryableOnlineRpc(deps, {
+      hostId,
+      timeoutMs: COMMAND_TIMEOUT_MS,
+      command: {
+        type: "host.discover_repos",
+        maxDepth: DISCOVERED_REPOS_MAX_DEPTH,
+        sinceDays: DISCOVERED_REPOS_SINCE_DAYS,
+        limit: DISCOVERED_REPOS_LIMIT,
+      },
+    });
+    return context.json({
+      repos: result.repos.map((repo) => ({
+        ...repo,
+        projectId:
+          getPublicProjectByLocalPathSource(deps.db, {
+            type: "local_path",
+            hostId,
+            path: repo.path,
+          })?.id ?? null,
+      })),
+      truncated: result.truncated,
+    });
   });
 
   get(routes.directory, async (context, query) => {

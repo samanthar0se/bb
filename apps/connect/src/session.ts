@@ -19,11 +19,83 @@ const SESSION_REFRESH_BEFORE_EXPIRY_MS =
   (CONNECT_SESSION_EXPIRES_IN_SECONDS - CONNECT_SESSION_UPDATE_AGE_SECONDS) *
   1000;
 
-export interface CacheEntry<T> {
-  value: Promise<T>;
-  expires: number;
+export const LOOKUP_JOIN_TIMEOUT_MS = 2_000;
+const LOOKUP_POLL_MS = 10;
+
+type LookupOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+interface InFlightLookup<T> {
+  startedAt: number;
+  outcome: LookupOutcome<T> | null;
 }
-const labelCache = new Map<string, CacheEntry<ResolvedLabel | null>>();
+
+async function awaitOutcome<T>(
+  lookup: InFlightLookup<T>,
+): Promise<LookupOutcome<T> | null> {
+  const deadline = lookup.startedAt + LOOKUP_JOIN_TIMEOUT_MS;
+  while (lookup.outcome === null && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, LOOKUP_POLL_MS));
+  }
+  return lookup.outcome;
+}
+
+export class SettledLookupCache<T> {
+  private readonly entries = new Map<string, { value: T; expires: number }>();
+  private readonly lookups = new Map<string, InFlightLookup<T>>();
+  private generation = 0;
+
+  async read(
+    key: string,
+    options: {
+      now: number;
+      fresh?: boolean;
+      expires: (value: T) => number;
+      load: () => Promise<T>;
+    },
+  ): Promise<T> {
+    if (!options.fresh) {
+      for (;;) {
+        const hit = this.entries.get(key);
+        if (hit && hit.expires > options.now) return hit.value;
+        if (hit) this.entries.delete(key);
+        const inFlight = this.lookups.get(key);
+        if (
+          inFlight === undefined ||
+          Date.now() - inFlight.startedAt >= LOOKUP_JOIN_TIMEOUT_MS
+        ) {
+          break;
+        }
+        const outcome = await awaitOutcome(inFlight);
+        if (outcome?.ok === true) return outcome.value;
+        if (outcome?.ok === false) throw outcome.error;
+      }
+    }
+    const generation = this.generation;
+    const lookup: InFlightLookup<T> = { startedAt: Date.now(), outcome: null };
+    this.lookups.set(key, lookup);
+    try {
+      const value = await options.load();
+      lookup.outcome = { ok: true, value };
+      if (generation === this.generation) {
+        this.entries.set(key, { value, expires: options.expires(value) });
+      }
+      return value;
+    } catch (error) {
+      lookup.outcome = { ok: false, error };
+      throw error;
+    } finally {
+      if (this.lookups.get(key) === lookup) this.lookups.delete(key);
+    }
+  }
+
+  delete(key: string): void {
+    this.entries.delete(key);
+    this.lookups.delete(key);
+    this.generation += 1;
+  }
+}
+
+const labelCache = new SettledLookupCache<ResolvedLabel | null>();
 
 interface CachedSession {
   sessionId: string;
@@ -31,42 +103,10 @@ interface CachedSession {
   expiresAt: number;
 }
 
-const sessionCache = new Map<string, CacheEntry<CachedSession | null>>();
+const sessionCache = new SettledLookupCache<CachedSession | null>();
 
 export function invalidateSessionCookie(cookieValue: string): void {
   sessionCache.delete(safeDecode(cookieValue));
-}
-
-export function cacheGet<T>(
-  map: Map<string, CacheEntry<T>>,
-  key: string,
-  now: number,
-): Promise<T> | undefined {
-  const hit = map.get(key);
-  if (hit && hit.expires > now) return hit.value;
-  if (hit) map.delete(key);
-  return undefined;
-}
-
-export function cacheStore<T>(
-  map: Map<string, CacheEntry<T>>,
-  key: string,
-  value: Promise<T>,
-  expires: number,
-  settledExpires?: (value: T) => number,
-): Promise<T> {
-  const entry: CacheEntry<T> = { value, expires };
-  map.set(key, entry);
-  value.then(
-    (settled) => {
-      if (settledExpires === undefined || map.get(key) !== entry) return;
-      entry.expires = settledExpires(settled);
-    },
-    () => {
-      if (map.get(key) === entry) map.delete(key);
-    },
-  );
-  return value;
 }
 
 interface ResolvedServer {
@@ -101,16 +141,12 @@ export async function resolveLabel(
   options?: { fresh?: boolean },
 ): Promise<ResolvedLabel | null> {
   const now = Date.now();
-  if (!options?.fresh) {
-    const cached = cacheGet(labelCache, label, now);
-    if (cached !== undefined) return cached;
-  }
-  return cacheStore(
-    labelCache,
-    label,
-    lookupLabel(label, db),
-    now + LABEL_TTL_MS,
-  );
+  return labelCache.read(label, {
+    now,
+    fresh: options?.fresh,
+    expires: () => now + LABEL_TTL_MS,
+    load: () => lookupLabel(label, db),
+  });
 }
 
 async function lookupLabel(
@@ -205,26 +241,21 @@ export async function verifySessionCookieDetails(
   if (dot <= 0) return null;
 
   const now = Date.now();
-  const cached = cacheGet(sessionCache, decoded, now);
-  const cachedSession =
-    cached !== undefined
-      ? await cached
-      : await cacheStore(
-          sessionCache,
-          decoded,
-          lookupCachedSession(
-            decoded.slice(0, dot),
-            decoded.slice(dot + 1),
-            secret,
-            db,
-            now,
-          ),
-          now + SESSION_TTL_MS,
-          (looked) =>
-            looked === null
-              ? now + SESSION_TTL_MS
-              : Math.min(now + SESSION_TTL_MS, looked.expiresAt),
-        );
+  const cachedSession = await sessionCache.read(decoded, {
+    now,
+    expires: (looked) =>
+      looked === null
+        ? now + SESSION_TTL_MS
+        : Math.min(now + SESSION_TTL_MS, looked.expiresAt),
+    load: () =>
+      lookupCachedSession(
+        decoded.slice(0, dot),
+        decoded.slice(dot + 1),
+        secret,
+        db,
+        now,
+      ),
+  });
   return cachedSession === null ? null : verifiedSession(cachedSession, now);
 }
 
@@ -283,10 +314,7 @@ interface VerifiedMachine {
   userId: string;
 }
 
-const machineCredentialCache = new Map<
-  string,
-  CacheEntry<VerifiedMachine | null>
->();
+const machineCredentialCache = new SettledLookupCache<VerifiedMachine | null>();
 
 export async function verifyMachineCredentialDetails(
   credential: string,
@@ -295,14 +323,11 @@ export async function verifyMachineCredentialDetails(
   if (!credential) return null;
   const hash = await sha256Hex(credential);
   const now = Date.now();
-  const cached = cacheGet(machineCredentialCache, hash, now);
-  if (cached !== undefined) return cached;
-  return cacheStore(
-    machineCredentialCache,
-    hash,
-    lookupMachineCredential(hash, db),
-    now + MACHINE_CREDENTIAL_TTL_MS,
-  );
+  return machineCredentialCache.read(hash, {
+    now,
+    expires: () => now + MACHINE_CREDENTIAL_TTL_MS,
+    load: () => lookupMachineCredential(hash, db),
+  });
 }
 
 async function lookupMachineCredential(

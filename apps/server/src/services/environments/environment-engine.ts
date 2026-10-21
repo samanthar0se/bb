@@ -1,6 +1,7 @@
+import { emitPluginEnvironmentRemoved } from "../plugins/plugin-thread-events.js";
 import { withHostCleanup } from "../hosts/cleanup-context.js";
 import { findHostDataDir } from "../lib/entity-lookup.js";
-import { updateThread } from "@bb/db";
+import { getLatestThreadSequence, updateThread } from "@bb/db";
 import {
   assertEnvironmentPathAvailable,
   findBlockingEnvironmentPathClaim,
@@ -18,7 +19,7 @@ import {
   runEnvironmentHook,
   ENVIRONMENT_HOOK_TIMEOUT_MS,
 } from "./environment-hooks.js";
-import { eq, and, isNull, or, sql } from "drizzle-orm";
+import { eq, and, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   releaseFinishedEnvironmentPreparationOwners,
@@ -40,6 +41,7 @@ import {
   type DbNotifier,
   type DbQueryConnection,
   threads,
+  markHostEnvironmentsDestroyed,
 } from "@bb/db";
 import {
   canonicalizeHostPath,
@@ -148,7 +150,7 @@ const createResultSchema = z.discriminatedUnion("status", [
     status: z.literal("created"),
     path: z.string().min(1),
     ownsPath: z.boolean().default(false),
-    mergeBaseBranch: z.string().min(1).optional(),
+    mergeBaseBranch: z.string().min(1).nullable().optional(),
     resource: resourceSchema.optional(),
   }),
   z.object({
@@ -253,6 +255,9 @@ function provisioningReporter(
           .where(eq(environments.id, row.id))
           .run();
         deps.hub.notifyThread(owner, ["events-appended"], {
+          timelineSequence: getLatestThreadSequence(deps.db, {
+            threadId: owner,
+          }),
           eventTypes: ["system/thread-provisioning"],
         });
       });
@@ -505,6 +510,8 @@ async function runCreate(
           if (!adoptedExistingEnvironment || !existingProviderOwnsLifecycle) {
             row.mergeBaseBranch = produced.mergeBaseBranch ?? null;
             row.resource = produced.resource ?? null;
+          } else if (produced.mergeBaseBranch !== undefined) {
+            row.mergeBaseBranch = produced.mergeBaseBranch;
           }
         },
       );
@@ -562,6 +569,9 @@ async function runCreate(
           ],
         });
         deps.hub.notifyThread(context.thread.id, ["events-appended"], {
+          timelineSequence: getLatestThreadSequence(deps.db, {
+            threadId: context.thread.id,
+          }),
           eventTypes: ["system/thread-provisioning"],
         });
       }
@@ -732,32 +742,61 @@ async function runRemove(
         throw new Error("The environment provider became unavailable.");
       const result = removeResultSchema.parse(invocation.value);
       if (result.status === "failed") {
-        writeEnvironment(deps, environmentId, {
-          teardownStatus: "failed",
-          teardownMessage: result.message,
-          retireAt: Date.now() + REMOVE_RETRY_MS,
-        });
+        writeEnvironmentTeardownFailure(deps, environmentId, result.message);
         return;
       }
-      writeEnvironment(deps, environmentId, {
-        teardownStatus: "removed",
-        teardownMessage: null,
-        claimPath: null,
-        resource: null,
-        retireAt: null,
+      deps.db.transaction(() => {
+        writeEnvironment(deps, environmentId, {
+          teardownStatus: "removed",
+          teardownMessage: null,
+          claimPath: null,
+          resource: null,
+          retireAt: null,
+        });
+        applyLoggedEnvironmentLifecycleEvent(deps, {
+          environmentId,
+          event: { type: "destroy.recorded" },
+        });
       });
-      applyLoggedEnvironmentLifecycleEvent(deps, {
+      emitPluginEnvironmentRemoved({
         environmentId,
-        event: { type: "destroy.recorded" },
+        removedAt: Date.now(),
+        hostId: row.hostId,
+        path: row.path,
+        providerOwnedPath: row.providerOwnsPath,
       });
     } catch (error) {
-      writeEnvironment(deps, environmentId, {
-        teardownStatus: "failed",
-        teardownMessage: errorMessage(error),
-        retireAt: Date.now() + REMOVE_RETRY_MS,
-      });
+      writeEnvironmentTeardownFailure(deps, environmentId, errorMessage(error));
     }
   });
+}
+
+function writeEnvironmentTeardownFailure(
+  deps: Pick<Deps, "db" | "hub">,
+  environmentId: string,
+  message: string,
+): void {
+  const written = deps.db
+    .update(environments)
+    .set({
+      teardownStatus: "failed",
+      teardownMessage: message,
+      retireAt: Date.now() + REMOVE_RETRY_MS,
+      updatedAt: Date.now(),
+    })
+    .where(
+      and(
+        eq(environments.id, environmentId),
+        or(
+          isNull(environments.teardownStatus),
+          ne(environments.teardownStatus, "removed"),
+        ),
+      ),
+    )
+    .returning({ id: environments.id })
+    .all();
+  if (written.length > 0)
+    deps.hub.notifyEnvironment(environmentId, ["metadata-changed"]);
 }
 
 async function removeEnvironment(
@@ -892,6 +931,7 @@ export function cleanupEnvironment(deps: Deps, environmentId: string): boolean {
   if (
     row === null ||
     row.environmentProviderId === null ||
+    !row.providerOwnsPath ||
     environmentHasLiveThreads(deps.db, environmentId)
   )
     return false;
@@ -1144,6 +1184,9 @@ function appendThreadProvisioningEventToEnvironmentThreadsInTransaction(
       threadId: thread.id,
     });
     deps.hub.notifyThread(thread.id, ["events-appended"], {
+      timelineSequence: getLatestThreadSequence(deps.db, {
+        threadId: thread.id,
+      }),
       eventTypes: ["system/thread-provisioning"],
     });
   }
@@ -1365,6 +1408,9 @@ function settleEnvironmentProvisionOutcome(
           entries,
         });
         args.deps.hub.notifyThread(thread.id, ["events-appended"], {
+          timelineSequence: getLatestThreadSequence(args.deps.db, {
+            threadId: thread.id,
+          }),
           eventTypes: ["system/thread-provisioning"],
         });
         continue;
@@ -1813,6 +1859,18 @@ export async function advanceEnvironmentProvisioning(
     const context = getThreadProvisionContext(deps.db, threadId);
     if (context === null) return;
     const target = environment;
+    const preparation =
+      target.ownerThreadId === null
+        ? getPreparingEnvironment(deps.db, threadId)
+        : target;
+    const needsAttachment =
+      target.ownerThreadId !== null ||
+      preparation?.status === "provisioning" ||
+      preparation?.status === "ready" ||
+      context.state.environmentId !== target.id ||
+      context.request.environmentIntent.type !== "reuse" ||
+      context.request.environmentIntent.environmentId !== target.id ||
+      getThread(deps.db, threadId)?.environmentId !== target.id;
     if (
       target.status === "ready" &&
       target.ownerThreadId !== null &&
@@ -1824,31 +1882,33 @@ export async function advanceEnvironmentProvisioning(
         path: target.path,
       });
     assertEnvironmentPathAvailable(deps, { ...target, threadId });
-    deps.db.transaction(
-      (tx) => {
-        if (
-          getThreadProvisionContext(tx, threadId)?.state.provisioningId !==
-          context.state.provisioningId
-        )
-          return;
-        updateThread(tx, deps.hub, threadId, { environmentId: target.id });
-        markProviderEnvironmentAttached(tx, threadId, target.id);
-        context.request.environmentIntent = {
-          type: "reuse",
-          environmentId: target.id,
-        };
-        context.state.environmentId = target.id;
-        saveThreadProvisionContext({
-          replace: false,
-          db: tx,
-          threadId,
-          context,
-        });
-      },
-      { behavior: "immediate" },
-    );
-    environment = getEnvironment(deps.db, environment.id);
-    if (environment === null || environment.ownerThreadId !== null) return;
+    if (needsAttachment) {
+      deps.db.transaction(
+        (tx) => {
+          if (
+            getThreadProvisionContext(tx, threadId)?.state.provisioningId !==
+            context.state.provisioningId
+          )
+            return;
+          updateThread(tx, deps.hub, threadId, { environmentId: target.id });
+          markProviderEnvironmentAttached(tx, threadId, target.id);
+          context.request.environmentIntent = {
+            type: "reuse",
+            environmentId: target.id,
+          };
+          context.state.environmentId = target.id;
+          saveThreadProvisionContext({
+            replace: false,
+            db: tx,
+            threadId,
+            context,
+          });
+        },
+        { behavior: "immediate" },
+      );
+      environment = getEnvironment(deps.db, environment.id);
+      if (environment === null || environment.ownerThreadId !== null) return;
+    }
   }
   if (environment.status === "ready") {
     if (threadId != null && args.threadId === undefined)
@@ -1879,6 +1939,42 @@ export async function advanceEnvironmentProvisioning(
     run: () =>
       runEnvironmentProvisionCommand(deps, { environment: row, request }),
   });
+}
+
+export async function forgetHostEnvironments(
+  deps: Deps,
+  hostId: string,
+): Promise<void> {
+  const map = perDbRegistry(environmentOperations, deps.db);
+  const listRows = () =>
+    deps.db
+      .select({
+        id: environments.id,
+        path: environments.path,
+        providerOwnsPath: environments.providerOwnsPath,
+        status: environments.status,
+        teardownStatus: environments.teardownStatus,
+      })
+      .from(environments)
+      .where(eq(environments.hostId, hostId))
+      .all();
+  await Promise.all(
+    listRows().map((row) => map.get(row.id)?.done.catch(() => {})),
+  );
+  const pending = listRows().filter(
+    (row) => row.status !== "destroyed" || row.teardownStatus !== "removed",
+  );
+  markHostEnvironmentsDestroyed(deps.db, deps.hub, hostId);
+  const removedAt = Date.now();
+  for (const row of pending) {
+    emitPluginEnvironmentRemoved({
+      environmentId: row.id,
+      removedAt,
+      hostId,
+      path: row.path,
+      providerOwnedPath: row.providerOwnsPath,
+    });
+  }
 }
 
 export async function sweepProviderEnvironment(

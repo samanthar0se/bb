@@ -117,6 +117,7 @@ export function createThreadRecord(
       pluginMetadata: args.request.pluginMetadata,
       pluginMetadataByPlugin: args.request.experimental_pluginMetadataByPlugin,
       visibility: args.request.visibility,
+      parentNotifications: args.request.parentNotifications,
       // Every thread starts `pending`, with no exception to parameterise.
       // Creation is unhooked and provisions nothing; admission happens at the
       // first message's dispatch attempt, and clearing it is what moves the

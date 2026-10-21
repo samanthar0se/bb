@@ -1,11 +1,22 @@
 import { z } from "zod";
 import {
+  GENERATED_ID_ALPHABET,
+  GENERATED_ID_SUFFIX_LENGTH,
   terminalColsSchema,
   terminalDataBase64Schema,
   terminalRowsSchema,
   terminalSessionCloseReasonSchema,
   terminalSessionStatusSchema,
 } from "@bb/domain";
+
+export const terminalSessionIdSchema = z
+  .string()
+  .regex(
+    new RegExp(
+      `^term_[${GENERATED_ID_ALPHABET}]{${GENERATED_ID_SUFFIX_LENGTH}}$`,
+      "u",
+    ),
+  );
 
 export const terminalSessionSchema = z.object({
   id: z.string().min(1),
@@ -86,6 +97,7 @@ export type TerminalCreateTarget = z.infer<typeof terminalCreateTargetSchema>;
 export const createTerminalRequestSchema = z
   .object({
     cols: terminalColsSchema,
+    id: terminalSessionIdSchema.optional(),
     rows: terminalRowsSchema,
     start: z
       .discriminatedUnion("mode", [
@@ -174,6 +186,10 @@ export type TerminalOutputQuery = z.infer<typeof terminalOutputQuerySchema>;
 export const terminalWebSocketQuerySchema = z
   .object({
     sinceSeq: z.coerce.number().int().nonnegative().default(0),
+    outputAcks: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((value) => value === "1"),
   })
   .strict();
 
@@ -208,6 +224,18 @@ export const terminalClientMessageSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("ping"),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("ack"),
+      nextSeq: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("visibility"),
+      visible: z.boolean(),
     })
     .strict(),
 ]);

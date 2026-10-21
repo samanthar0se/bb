@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { arrayMove } from "@dnd-kit/sortable";
-import type {
-  AppSettings,
-  CompletedTurnDisplay,
-  ProviderInfo,
+import {
+  defaultAppSettings,
+  IDLE_PROVIDER_SESSION_TIMEOUT_MINUTES,
+  type AppSettings,
+  type CompletedTurnDisplay,
+  type ProviderInfo,
 } from "@bb/domain";
 import { Button } from "@bb/shared-ui/button";
 import { COARSE_POINTER_ICON_SIZE_CLASS } from "@bb/shared-ui/coarse-pointer-sizing";
@@ -31,14 +33,24 @@ import {
   useSystemProviders,
 } from "@/hooks/queries/system-queries";
 import {
+  SETTINGS_DROPDOWN_CONTENT_CLASS,
+  SETTINGS_DROPDOWN_TRIGGER_CLASS,
+} from "./settings-dropdown";
+import {
   SortableSettingsRowList,
   useSortableSettingsRow,
 } from "./sortable-settings-rows";
 
+function idleTimeoutLabel(minutes: number): string {
+  return minutes === 0 ? "ASAP" : `${minutes} minutes`;
+}
+
 interface ProvidersSettingsSectionProps {
   disabled: boolean;
   generalSettings: AppSettings;
-  onGeneralSettingsChange: (next: AppSettings) => Promise<unknown> | void;
+  onGeneralSettingsChange: (
+    patch: Partial<AppSettings>,
+  ) => Promise<unknown> | void;
 }
 
 function applyProviderOrder(
@@ -78,14 +90,13 @@ function withProviderCompletedTurnDisplay(
   settings: AppSettings,
   provider: ProviderInfo,
   display: CompletedTurnDisplay,
-): AppSettings {
+): Pick<AppSettings, "providerCompletedTurnDisplay"> {
   const overrides = Object.fromEntries(
     Object.entries(settings.providerCompletedTurnDisplay).filter(
       ([providerId]) => providerId !== provider.id,
     ),
   );
   return {
-    ...settings,
     providerCompletedTurnDisplay:
       display === provider.completedTurnDisplay
         ? overrides
@@ -216,7 +227,6 @@ function SortableProviderRow({
           provider.available
             ? () => {
                 void onGeneralSettingsChange({
-                  ...generalSettings,
                   defaultProviderId: provider.id,
                 });
               }
@@ -292,7 +302,6 @@ export function ProvidersSettingsSection({
     let write: Promise<unknown> | void;
     try {
       write = onGeneralSettingsChange({
-        ...generalSettings,
         providerOrder: next,
       });
     } catch {
@@ -365,22 +374,78 @@ export function ProvidersSettingsSection({
         )}
       </SettingsSection>
       <SettingsSection title="Configuration">
-        <SettingsWithControl
-          label="Allow faster service tiers"
-          description="Turn this off to use the default service tier for all new turns, including those from queued messages and automations."
-        >
-          <Switch
-            checked={generalSettings.allowFastServiceTier}
-            disabled={disabled}
-            onCheckedChange={(enabled) =>
-              onGeneralSettingsChange({
-                ...generalSettings,
-                allowFastServiceTier: enabled,
-              })
-            }
-            aria-label="Allow faster service tiers"
-          />
-        </SettingsWithControl>
+        <div className="space-y-5">
+          <SettingsWithControl
+            label="Allow faster service tiers"
+            description="Turn this off to use the default service tier for all new turns, including those from queued messages and automations."
+          >
+            <Switch
+              checked={generalSettings.allowFastServiceTier}
+              disabled={disabled}
+              onCheckedChange={(enabled) =>
+                onGeneralSettingsChange({
+                  allowFastServiceTier: enabled,
+                })
+              }
+              aria-label="Allow faster service tiers"
+            />
+          </SettingsWithControl>
+          <SettingsWithControl
+            label="Release idle agent sessions"
+            description="Stop agents that have been idle this long to free memory. Threads keep their history and pick up on your next message. Checked every 5 minutes."
+          >
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={SETTINGS_DROPDOWN_TRIGGER_CLASS}
+                  disabled={disabled}
+                  aria-label="Release idle agent sessions"
+                >
+                  {idleTimeoutLabel(
+                    generalSettings.idleProviderSessionTimeoutMinutes,
+                  )}
+                  <Icon
+                    name="ChevronDown"
+                    className="size-3.5 text-muted-foreground"
+                  />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className={SETTINGS_DROPDOWN_CONTENT_CLASS}
+              >
+                {IDLE_PROVIDER_SESSION_TIMEOUT_MINUTES.map((minutes) => (
+                  <DropdownMenuItem
+                    key={minutes}
+                    onSelect={() =>
+                      onGeneralSettingsChange({
+                        idleProviderSessionTimeoutMinutes: minutes,
+                      })
+                    }
+                  >
+                    {idleTimeoutLabel(minutes)}
+                    {minutes ===
+                    defaultAppSettings.idleProviderSessionTimeoutMinutes
+                      ? " (default)"
+                      : null}
+                    <Icon
+                      name="Check"
+                      className={cn(
+                        "ml-auto",
+                        minutes !==
+                          generalSettings.idleProviderSessionTimeoutMinutes &&
+                          "opacity-0",
+                        COARSE_POINTER_ICON_SIZE_CLASS,
+                      )}
+                    />
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SettingsWithControl>
+        </div>
         {providers.length === 0 ? null : (
           <div className="mt-4 space-y-3 border-t border-border pt-4">
             <div>

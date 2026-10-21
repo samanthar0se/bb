@@ -74,7 +74,7 @@ import type {
 } from "../../src/data/events.js";
 import { upsertHost } from "../../src/data/hosts.js";
 import type { DbConnection } from "../../src/connection.js";
-import { createMigratedConnection } from "../helpers/migrated-connection.js";
+import { createMigratedConnection } from "../../src/testing.js";
 
 function setup() {
   const db = createMigratedConnection();
@@ -716,6 +716,7 @@ describe("events", () => {
       taskStatus: "running" as const,
       description: "Background command",
       skipTranscript: false,
+      foreground: false,
     };
     const completedBackgroundItem = {
       ...backgroundItem,
@@ -2021,6 +2022,7 @@ describe("events", () => {
           status,
           taskStatus: status === "pending" ? "running" : "completed",
           skipTranscript: false,
+          foreground: false,
         },
       });
     const progress = (sequence: number, itemId: string) => ({
@@ -2394,6 +2396,14 @@ describe("events", () => {
       projectId: project.id,
       providerId: "codex",
     });
+    const unrelatedStateThread = createThread(db, noopNotifier, {
+      projectId: project.id,
+      providerId: "codex",
+    });
+    const noStateThread = createThread(db, noopNotifier, {
+      projectId: project.id,
+      providerId: "codex",
+    });
 
     insertEvents(db, noopNotifier, [
       {
@@ -2457,11 +2467,25 @@ describe("events", () => {
         providerThreadId: "provider-thread-2",
         data: JSON.stringify({ kind: "other-plugin/widget", payload: {} }),
       },
+      {
+        threadId: unrelatedStateThread.id,
+        sequence: 1,
+        type: "thread/extensionState/updated",
+        ...threadEventFields,
+        providerThreadId: "provider-thread-3",
+        data: JSON.stringify({ kind: "other-plugin/widget", payload: {} }),
+      },
     ]);
 
     const rowsByThreadId = new Map(
       listLatestThreadStateEventRowsByThreadIds(db, {
-        threadIds: [thread.id, otherThread.id, thread.id],
+        threadIds: [
+          thread.id,
+          otherThread.id,
+          unrelatedStateThread.id,
+          noStateThread.id,
+          thread.id,
+        ],
         kind: "provider-codex/goal",
       }).map((row) => [row.threadId, row]),
     );
@@ -2472,21 +2496,52 @@ describe("events", () => {
       "thread/extensionState/updated",
     );
     expect(rowsByThreadId.get(otherThread.id)?.sequence).toBe(2);
-  });
-
-  it("batches latest goal lookups above the SQLite variable limit", () => {
-    const { db } = setup();
-    const threadIds = Array.from(
-      { length: 32_767 },
-      (_, index) => `thr_missing_goal_${index}`,
-    );
-
+    expect(rowsByThreadId.has(unrelatedStateThread.id)).toBe(false);
+    expect(rowsByThreadId.has(noStateThread.id)).toBe(false);
     expect(
       listLatestThreadStateEventRowsByThreadIds(db, {
-        threadIds,
+        threadIds: [],
         kind: "provider-codex/goal",
       }),
     ).toEqual([]);
+  });
+
+  it("batches latest goal lookups above the SQLite variable limit", () => {
+    const { db, project, thread } = setup();
+    const finalBatchThread = createThread(db, noopNotifier, {
+      projectId: project.id,
+      providerId: "codex",
+    });
+    insertEvents(db, noopNotifier, [
+      {
+        threadId: thread.id,
+        sequence: 1,
+        type: "thread/goal/updated",
+        ...threadEventFields,
+        data: JSON.stringify({ objective: "First batch goal" }),
+      },
+      {
+        threadId: finalBatchThread.id,
+        sequence: 1,
+        type: "thread/goal/updated",
+        ...threadEventFields,
+        data: JSON.stringify({ objective: "Final batch goal" }),
+      },
+    ]);
+    const threadIds = Array.from({ length: 32_767 }, (_, index) => {
+      if (index === 0) return thread.id;
+      if (index === 32_766) return finalBatchThread.id;
+      return `thr_missing_goal_${index}`;
+    });
+
+    const rows = listLatestThreadStateEventRowsByThreadIds(db, {
+      threadIds,
+      kind: "provider-codex/goal",
+    });
+
+    expect(rows.map((row) => row.threadId).sort()).toEqual(
+      [thread.id, finalBatchThread.id].sort(),
+    );
   });
 
   it("lists only open accepted turn inputs after the latest interruption", () => {
@@ -3534,6 +3589,7 @@ describe("events", () => {
           status: "pending",
           taskStatus,
           skipTranscript: false,
+          foreground: false,
         },
       });
 
@@ -3601,6 +3657,7 @@ describe("events", () => {
           status: taskStatus === "completed" ? "completed" : "pending",
           taskStatus,
           skipTranscript: false,
+          foreground: false,
         },
       });
 
@@ -3668,6 +3725,7 @@ describe("events", () => {
           status: "pending",
           taskStatus: "running",
           skipTranscript: false,
+          foreground: false,
         },
       });
 
@@ -3725,6 +3783,7 @@ describe("events", () => {
           status: taskStatus === "completed" ? "completed" : "pending",
           taskStatus,
           skipTranscript: false,
+          foreground: false,
         },
       });
 
@@ -3860,6 +3919,7 @@ describe("events", () => {
           status: args.itemStatus,
           taskStatus: args.taskStatus,
           skipTranscript: false,
+          foreground: false,
         },
       });
 
@@ -4054,6 +4114,7 @@ describe("events", () => {
       taskStatus: string;
       taskType: string;
       skipTranscript?: boolean;
+      foreground?: boolean;
     }) =>
       JSON.stringify({
         item: {
@@ -4064,6 +4125,7 @@ describe("events", () => {
           status: args.itemStatus,
           taskStatus: args.taskStatus,
           skipTranscript: args.skipTranscript ?? false,
+          foreground: args.foreground ?? false,
         },
       });
 
@@ -4219,6 +4281,42 @@ describe("events", () => {
           taskType: LOCAL_SUBAGENT_TASK_TYPE,
         }),
       },
+      {
+        threadId: thread.id,
+        sequence: 11,
+        scope: turnScope("turn-1"),
+        type: "item/started",
+        itemId: "task:agent-foreground",
+        itemKind: "backgroundTask",
+        parentToolCallId: null,
+        data: taskData({
+          itemId: "task:agent-foreground",
+          itemStatus: "pending",
+          taskStatus: "running",
+          taskType: LOCAL_AGENT_TASK_TYPE,
+          foreground: true,
+        }),
+      },
+      {
+        threadId: thread.id,
+        sequence: 12,
+        scope: turnScope("turn-1"),
+        type: "item/started",
+        itemId: "task:legacy-agent",
+        itemKind: "backgroundTask",
+        parentToolCallId: null,
+        data: JSON.stringify({
+          item: {
+            id: "task:legacy-agent",
+            type: "backgroundTask",
+            taskType: LOCAL_AGENT_TASK_TYPE,
+            description: "stored before the foreground flag",
+            status: "pending",
+            taskStatus: "running",
+            skipTranscript: false,
+          },
+        }),
+      },
     ]);
 
     const countsByThreadId = new Map(
@@ -4230,7 +4328,7 @@ describe("events", () => {
     expect(countsByThreadId.get(thread.id)).toEqual({
       threadId: thread.id,
       activeWorkflowCount: 1,
-      activeBackgroundAgentCount: 2,
+      activeBackgroundAgentCount: 3,
       activeBackgroundCommandCount: 1,
     });
   });
@@ -4251,6 +4349,7 @@ describe("events", () => {
           status: "pending",
           taskStatus: "running",
           skipTranscript: false,
+          foreground: false,
         },
       });
 
@@ -4321,6 +4420,7 @@ describe("events", () => {
           status: taskStatus === "completed" ? "completed" : "pending",
           taskStatus,
           skipTranscript: false,
+          foreground: false,
         },
       });
 
@@ -4447,6 +4547,7 @@ describe("events", () => {
       ["events-appended"],
       {
         eventTypes: ["system/error", "client/turn/requested"],
+        timelineSequence: 2,
       },
     );
     expect(spy.notifyThread).toHaveBeenCalledWith(
@@ -4454,6 +4555,7 @@ describe("events", () => {
       ["events-appended"],
       {
         eventTypes: ["system/error"],
+        timelineSequence: 1,
       },
     );
     expect(spy.notifyThread).toHaveBeenCalledTimes(2);

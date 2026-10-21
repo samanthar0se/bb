@@ -28,6 +28,7 @@ export interface BuildSessionOptionsArgs {
   workflowsEnabled: boolean;
   chromeEnabled: boolean;
   disable1MContext: boolean;
+  artifactsEnabled: boolean;
   sandboxEnabled: boolean;
   memoryEnabled?: boolean;
 }
@@ -63,11 +64,23 @@ const CLAUDE_CODE_EXECUTABLE_ENV = "BB_CLAUDE_CODE_EXECUTABLE";
 
 export function toSdkEffort(
   reasoningLevel: ReasoningLevel,
-): ClaudeSdkReasoningEffort {
-  if (reasoningLevel === "ultracode") return "xhigh";
-  if (reasoningLevel === "none") return "low";
-  if (reasoningLevel === "ultra") return "max";
-  return reasoningLevel;
+): ClaudeSdkReasoningEffort | undefined {
+  switch (reasoningLevel) {
+    case "ultracode":
+      return "xhigh";
+    case "none":
+      return "low";
+    case "ultra":
+      return "max";
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return reasoningLevel;
+    default:
+      return undefined;
+  }
 }
 
 function buildFlagSettings(params: BuildSessionOptionsArgs): Settings {
@@ -76,6 +89,18 @@ function buildFlagSettings(params: BuildSessionOptionsArgs): Settings {
     enableWorkflows: params.workflowsEnabled,
     ultracode: params.reasoningLevel === "ultracode",
     fastMode: params.serviceTier === "fast",
+  };
+}
+
+export function buildClaudeFeatureEnv(
+  params: Pick<
+    BuildSessionOptionsArgs,
+    "artifactsEnabled" | "disable1MContext"
+  >,
+): Record<string, string> {
+  return {
+    CLAUDE_CODE_DISABLE_1M_CONTEXT: params.disable1MContext ? "1" : "0",
+    ...(params.artifactsEnabled ? { CLAUDE_CODE_ARTIFACT: "1" } : {}),
   };
 }
 
@@ -91,12 +116,14 @@ export function buildMutableFlagSettings(args: {
   workflowsEnabled: boolean;
   serviceTier: ServiceTier;
 }): ClaudeMutableFlagSettings {
+  const effortLevel =
+    args.reasoningLevel === undefined
+      ? undefined
+      : toSdkEffort(args.reasoningLevel);
   return {
     autoMemoryEnabled: args.memoryEnabled,
     enableWorkflows: args.workflowsEnabled,
-    ...(args.reasoningLevel !== undefined
-      ? { effortLevel: toSdkEffort(args.reasoningLevel) }
-      : {}),
+    ...(effortLevel !== undefined ? { effortLevel } : {}),
     ultracode: args.reasoningLevel === "ultracode",
     fastMode: args.serviceTier === "fast",
   };
@@ -246,6 +273,10 @@ export function buildSessionOptions(
     : [];
   const pathToClaudeCodeExecutable = resolveClaudeCodeExecutable({ env });
   const flagSettings = buildFlagSettings(params);
+  const effort =
+    params.reasoningLevel === undefined
+      ? undefined
+      : toSdkEffort(params.reasoningLevel);
   const extraArgs = buildChromeExtraArgs(params.chromeEnabled);
 
   return {
@@ -254,16 +285,12 @@ export function buildSessionOptions(
     model,
     env: {
       ...env,
-      CLAUDE_CODE_DISABLE_1M_CONTEXT: params.disable1MContext ? "1" : "0",
+      ...buildClaudeFeatureEnv(params),
     },
     permissionMode: params.permissionMode,
     allowBypassPermissions: params.permissionScope === "full",
-    ...(params.reasoningLevel
-      ? { effort: toSdkEffort(params.reasoningLevel) }
-      : {}),
-    ...(params.reasoningLevel
-      ? { thinking: SUMMARIZED_ADAPTIVE_THINKING }
-      : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    ...(effort !== undefined ? { thinking: SUMMARIZED_ADAPTIVE_THINKING } : {}),
     settings: flagSettings,
     ...(extraArgs ? { extraArgs } : {}),
     ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),

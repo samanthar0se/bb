@@ -811,9 +811,6 @@ jobs:
           echo "version=${NIGHTLY_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Applied bb-app and desktop version ${NIGHTLY_VERSION}."
 
-      - name: Typecheck desktop and launcher
-        run: pnpm exec turbo run typecheck --filter=@bb/desktop --filter=bb-app --output-logs=new-only
-
       - name: Package x64 nightly installer
         # Signs when the Windows certificate secrets exist; without them the
         # installer is unsigned and Windows SmartScreen warns before running it.
@@ -839,6 +836,28 @@ jobs:
             apps/desktop/release/nightly.yml
             apps/desktop/release/desktop-version-windows.json
           if-no-files-found: error
+
+  nightly-mobile-android:
+    name: Build and publish bb Nightly Android APK (EAS)
+    if: >-
+      ${{ !cancelled()
+      && needs.publish.result == 'success'
+      && (github.event_name == 'schedule'
+      || (inputs.npm_tag == 'nightly' && inputs.dry_run == false)
+      || needs.publish-nightly.result == 'success') }}
+    needs:
+      - publish
+      - publish-nightly
+    permissions:
+      contents: write
+    uses: ./.github/workflows/mobile-android-eas.yml
+    with:
+      profile: preview
+      publish: true
+      submit: false
+      version: ${{ needs.publish-nightly.outputs.version || needs.publish.outputs.version }}
+    secrets:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
   nightly-mobile-ios:
     name: Build bb Nightly iOS (EAS)

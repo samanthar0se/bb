@@ -8,10 +8,12 @@ import {
 } from "./api/machine-environment.js";
 import {
   machineEnvironmentReplaceSchema,
+  recordTelemetryEventRequestSchema,
   setAiServiceSelectionRequestSchema,
   systemProviderEnabledRequestSchema,
   testAiServiceRequestSchema,
   type MachineEnvironmentReplace,
+  type RecordTelemetryEventRequest,
   type SetAiServiceSelectionRequest,
   type SystemAiServicesResponse,
   type SystemProviderCatalogEntry,
@@ -123,6 +125,11 @@ import type {
   EnvironmentDiffPatchRequest,
   EnvironmentDiffPatchResponse,
   EnvironmentDiffQuery,
+  EnvironmentDiffFilesQuery,
+  EnvironmentDiffViewedClearRequest,
+  EnvironmentDiffViewedQueryRequest,
+  EnvironmentDiffViewedMarkRequest,
+  EnvironmentDiffViewedResponse,
   EnvironmentDiffResponse,
   EnvironmentPathsQuery,
   EnvironmentPullRequestResponse,
@@ -130,9 +137,11 @@ import type {
   EnvironmentStatusResponse,
   HostDirectoryListing,
   HostDirectoryQuery,
+  HostDiscoveredReposResponse,
   HostEnrollmentCommandResponse,
   HostReconnectResponse,
   HostListQuery,
+  HostDeleteQuery,
   HostActionResponse,
   HostCloneDefaultPathQuery,
   HostCloneDefaultPathResponse,
@@ -186,6 +195,7 @@ import type {
   ReorderPinnedThreadRequest,
   ReorderProjectRequest,
   ReorderQueuedMessageRequest,
+  QueuedMessageEditHoldResponse,
   ResolvePendingInteractionRequest,
   ResolveThreadMentionsRequest,
   ResolveThreadMentionsResponse,
@@ -219,6 +229,7 @@ import type {
   SystemAppUpdateApplyRequest,
   SystemAppUpdateQuery,
   SystemAppUpdateStatus,
+  SystemCliCommandStatus,
   SystemVersionQuery,
   SystemVersionResponse,
   SystemVoiceTranscriptionForm,
@@ -235,6 +246,8 @@ import type {
   ThreadChildSummaryResponse,
   ThreadEventWaitQuery,
   ThreadEventsQuery,
+  ThreadMessageQuery,
+  ThreadMessageResponse,
   ThreadSectionMutationResponse,
   ThreadSectionResponse,
   ThreadGetQuery,
@@ -242,6 +255,7 @@ import type {
   ThreadCountResponse,
   ThreadListQuery,
   ThreadListResponse,
+  ThreadConversationOutlineQuery,
   ThreadConversationOutlineResponse,
   ThreadOpenRequest,
   ThreadOpenResponse,
@@ -252,6 +266,12 @@ import type {
   QueuedMessageListQuery,
   ThreadQueuedMessageListResponse,
   ThreadResponse,
+  PluginThreadMetadataListRequest,
+  PluginThreadMetadataListResponse,
+  ThreadAncestorsListRequest,
+  ThreadAncestorsListResponse,
+  ThreadDescendantsListRequest,
+  ThreadDescendantsListResponse,
   ThreadPluginMetadataQuery,
   ThreadPluginMetadataResponse,
   ThreadSearchQuery,
@@ -312,6 +332,9 @@ import {
   createThreadRequestSchema,
   forkThreadRequestSchema,
   updateThreadPluginMetadataRequestSchema,
+  pluginThreadMetadataListRequestSchema,
+  threadAncestorsListRequestSchema,
+  threadDescendantsListRequestSchema,
   threadPluginMetadataQuerySchema,
   deleteThreadRequestSchema,
   environmentActionRequestSchema,
@@ -319,10 +342,15 @@ import {
   environmentDiffFileQuerySchema,
   environmentDiffPatchRequestSchema,
   environmentDiffQuerySchema,
+  environmentDiffFilesQuerySchema,
+  environmentDiffViewedClearRequestSchema,
+  environmentDiffViewedQueryRequestSchema,
+  environmentDiffViewedMarkRequestSchema,
   environmentPathsQuerySchema,
   environmentStatusQuerySchema,
   hostDirectoryQuerySchema,
   hostListQuerySchema,
+  hostDeleteQuerySchema,
   hostCloneDefaultPathQuerySchema,
   hostFileListRequestSchema,
   hostFileReadRequestSchema,
@@ -369,6 +397,7 @@ import {
   systemAppUpdateQuerySchema,
   threadEventWaitQuerySchema,
   threadEventsQuerySchema,
+  threadMessageQuerySchema,
   threadGetQuerySchema,
   threadCountQuerySchema,
   threadListQuerySchema,
@@ -384,6 +413,7 @@ import {
   threadTimelineQuerySchema,
   systemCliSkillsStatusQuerySchema,
   systemInstallCliSkillsRequestSchema,
+  threadConversationOutlineQuerySchema,
   timelineTurnSummaryDetailsQuerySchema,
   listEnvironmentsQuerySchema,
   updateEnvironmentRequestSchema,
@@ -408,9 +438,16 @@ import {
 import type { ApiError } from "./errors.js";
 
 type PathProjectSourceId = { param: { id: string; sourceId: string } };
+type PathThreadMessage = { param: { id: string; seq: string } };
 type PathThreadInteractionId = {
   param: { id: string; interactionId: string };
 };
+
+export const UI_PREFERENCES_TAG = "ui-preferences";
+
+export function environmentPullRequestTag(environmentId: string): string {
+  return `environment-pull-request:${environmentId}`;
+}
 
 export const publicApiRoutes = {
   promptHistory: {
@@ -925,7 +962,9 @@ export const publicApiRoutes = {
     delete: defineRoute({
       path: "/hosts/:id",
       method: "delete",
-      request: noRequest<PathId>(),
+      request: optionalQueryRequest<PathId, HostDeleteQuery>(
+        hostDeleteQuerySchema,
+      ),
       response: jsonResponse<{ ok: true }>(),
     }),
     directory: defineRoute({
@@ -935,6 +974,12 @@ export const publicApiRoutes = {
         hostDirectoryQuerySchema,
       ),
       response: jsonResponse<HostDirectoryListing>(),
+    }),
+    discoveredRepos: defineRoute({
+      path: "/hosts/:id/discovered-repos",
+      method: "get",
+      request: noRequest<PathId>(),
+      response: jsonResponse<HostDiscoveredReposResponse>(),
     }),
     file: defineRoute({
       path: "/hosts/:id/files/:filePath{.+}",
@@ -1152,6 +1197,7 @@ export const publicApiRoutes = {
       method: "get",
       request: noRequest<PathId>(),
       response: jsonResponse<EnvironmentPullRequestResponse>(),
+      tags: ({ params }) => [environmentPullRequestTag(params.id)],
     }),
     diff: defineRoute({
       path: "/environments/:id/diff",
@@ -1164,8 +1210,8 @@ export const publicApiRoutes = {
     diffFiles: defineRoute({
       path: "/environments/:id/diff/files",
       method: "get",
-      request: queryRequest<PathId, EnvironmentDiffQuery>(
-        environmentDiffQuerySchema,
+      request: queryRequest<PathId, EnvironmentDiffFilesQuery>(
+        environmentDiffFilesQuerySchema,
       ),
       response: jsonResponse<EnvironmentDiffFilesResponse>(),
     }),
@@ -1176,6 +1222,38 @@ export const publicApiRoutes = {
         environmentDiffPatchRequestSchema,
       ),
       response: jsonResponse<EnvironmentDiffPatchResponse>(),
+    }),
+    diffViewed: defineRoute({
+      path: "/environments/:id/diff/viewed",
+      method: "get",
+      request: queryRequest<PathId, EnvironmentDiffQuery>(
+        environmentDiffQuerySchema,
+      ),
+      response: jsonResponse<EnvironmentDiffViewedResponse>(),
+    }),
+    queryDiffViewed: defineRoute({
+      path: "/environments/:id/diff/viewed",
+      method: "post",
+      request: jsonRequest<PathId, EnvironmentDiffViewedQueryRequest>(
+        environmentDiffViewedQueryRequestSchema,
+      ),
+      response: jsonResponse<EnvironmentDiffViewedResponse>(),
+    }),
+    markDiffViewed: defineRoute({
+      path: "/environments/:id/diff/viewed",
+      method: "put",
+      request: jsonRequest<PathId, EnvironmentDiffViewedMarkRequest>(
+        environmentDiffViewedMarkRequestSchema,
+      ),
+      response: jsonResponse<{ ok: true }>(),
+    }),
+    clearDiffViewed: defineRoute({
+      path: "/environments/:id/diff/viewed",
+      method: "delete",
+      request: jsonRequest<PathId, EnvironmentDiffViewedClearRequest>(
+        environmentDiffViewedClearRequestSchema,
+      ),
+      response: jsonResponse<{ ok: true }>(),
     }),
     diffFile: defineRoute({
       path: "/environments/:id/diff/file",
@@ -1358,7 +1436,48 @@ export const publicApiRoutes = {
       ),
       response: jsonResponse<ThreadResponse>(),
     }),
+    /**
+     * Each of `threadIds` (1–200) that exists, with its ancestors' ids from
+     * the parent up to the root; archived and deleted threads included.
+     * Unknown ids are omitted.
+     */
+    ancestors: defineRoute({
+      path: "/threads/ancestors",
+      method: "post",
+      request: jsonRequest<EmptyInput, ThreadAncestorsListRequest>(
+        threadAncestorsListRequestSchema,
+      ),
+      response: jsonResponse<ThreadAncestorsListResponse>(),
+    }),
+    /**
+     * Each of `threadIds` (1–200) that exists and is not deleted, with the
+     * ids of every thread below it, children first. Archived and hidden
+     * descendants are omitted unless `includeArchived` / `includeHidden` is
+     * true, but threads below them are still returned; deleted threads and
+     * unknown ids are always omitted.
+     */
+    descendants: defineRoute({
+      path: "/threads/descendants",
+      method: "post",
+      request: jsonRequest<EmptyInput, ThreadDescendantsListRequest>(
+        threadDescendantsListRequestSchema,
+      ),
+      response: jsonResponse<ThreadDescendantsListResponse>(),
+    }),
     pluginMetadata: {
+      /**
+       * `pluginId`'s metadata for each of `threadIds` (1–200) that has any,
+       * archived and deleted threads included. Threads without a namespace
+       * and corrupt records are omitted.
+       */
+      list: defineRoute({
+        path: "/threads/plugin-metadata",
+        method: "post",
+        request: jsonRequest<EmptyInput, PluginThreadMetadataListRequest>(
+          pluginThreadMetadataListRequestSchema,
+        ),
+        response: jsonResponse<PluginThreadMetadataListResponse>(),
+      }),
       get: defineRoute({
         path: "/threads/:id/plugin-metadata",
         method: "get",
@@ -1452,6 +1571,29 @@ export const publicApiRoutes = {
         SendQueuedMessageRequest
       >(sendQueuedMessageRequestSchema),
       response: jsonResponse<SendQueuedMessageResponse>(),
+    }),
+    /**
+     * Hold a queued message while someone edits it: no automatic dispatch
+     * claims it, and the drainable rows behind it wait, until the hold is
+     * released, a save clears it, or `leaseMs` passes without a renewal.
+     * Calling it again renews the lease. Responds 409 once a dispatch has
+     * claimed the row.
+     */
+    holdQueuedMessageForEdit: defineRoute({
+      path: "/threads/:id/queued-messages/:queuedMessageId/edit-hold",
+      method: "post",
+      request: noRequest<PathThreadAndQueuedMessage>(),
+      response: jsonResponse<QueuedMessageEditHoldResponse>(),
+    }),
+    /**
+     * Release an edit hold without saving, letting the row dispatch as it
+     * would have. Releasing a row that is not held is a no-op.
+     */
+    releaseQueuedMessageEditHold: defineRoute({
+      path: "/threads/:id/queued-messages/:queuedMessageId/edit-hold",
+      method: "delete",
+      request: noRequest<PathThreadAndQueuedMessage>(),
+      response: jsonResponse<{ ok: true }>(),
     }),
     reorderQueuedMessage: defineRoute({
       path: "/threads/:id/queued-messages/:queuedMessageId/order",
@@ -1657,7 +1799,9 @@ export const publicApiRoutes = {
     conversationOutline: defineRoute({
       path: "/threads/:id/conversation-outline",
       method: "get",
-      request: noRequest<PathId>(),
+      request: queryRequest<PathId, ThreadConversationOutlineQuery>(
+        threadConversationOutlineQuerySchema,
+      ),
       response: jsonResponse<ThreadConversationOutlineResponse>(),
     }),
     timelineTurnSummaryDetails: defineRoute({
@@ -1681,6 +1825,14 @@ export const publicApiRoutes = {
         threadEventsQuerySchema,
       ),
       response: jsonResponse<ThreadEventRow[]>(),
+    }),
+    message: defineRoute({
+      path: "/threads/:id/messages/:seq",
+      method: "get",
+      request: optionalQueryRequest<PathThreadMessage, ThreadMessageQuery>(
+        threadMessageQuerySchema,
+      ),
+      response: jsonResponse<ThreadMessageResponse>(),
     }),
     eventWait: defineRoute({
       path: "/threads/:id/events/wait",
@@ -1822,6 +1974,14 @@ export const publicApiRoutes = {
       ),
       response: jsonResponse<TestAiServiceResponse>(),
     }),
+    recordTelemetryEvent: defineRoute({
+      path: "/system/telemetry/events",
+      method: "post",
+      request: jsonRequest<EmptyInput, RecordTelemetryEventRequest>(
+        recordTelemetryEventRequestSchema,
+      ),
+      response: jsonResponse<{ ok: true }>(),
+    }),
     generalSettings: defineRoute({
       path: "/settings/general",
       method: "put",
@@ -1861,6 +2021,7 @@ export const publicApiRoutes = {
       method: "get",
       request: noRequest(),
       response: jsonResponse<UiPreferencesResponse>(),
+      tags: () => [UI_PREFERENCES_TAG],
     }),
     updateUiPreference: defineRoute({
       path: "/preferences/ui/:key",
@@ -1873,6 +2034,7 @@ export const publicApiRoutes = {
         jsonResponse<ApiError>({ status: 404 }),
         jsonResponse<ApiError>({ status: 409 }),
       ],
+      invalidates: () => [UI_PREFERENCES_TAG],
     }),
     resetUiPreference: defineRoute({
       path: "/preferences/ui/:key",
@@ -1882,6 +2044,7 @@ export const publicApiRoutes = {
         jsonResponse<UiPreferenceResponse>(),
         jsonResponse<ApiError>({ status: 404 }),
       ],
+      invalidates: () => [UI_PREFERENCES_TAG],
     }),
     themes: defineRoute({
       path: "/settings/themes",
@@ -2027,6 +2190,24 @@ export const publicApiRoutes = {
         systemAppUpdateAcknowledgeRequestSchema,
       ),
       response: jsonResponse<SystemAppUpdateStatus>(),
+    }),
+    cliCommand: defineRoute({
+      path: "/system/cli-command",
+      method: "get",
+      request: noRequest<EmptyInput>(),
+      response: jsonResponse<SystemCliCommandStatus>(),
+    }),
+    installCliCommand: defineRoute({
+      path: "/system/cli-command/install",
+      method: "post",
+      request: noRequest<EmptyInput>(),
+      response: jsonResponse<SystemCliCommandStatus>(),
+    }),
+    removeCliCommand: defineRoute({
+      path: "/system/cli-command/remove",
+      method: "post",
+      request: noRequest<EmptyInput>(),
+      response: jsonResponse<SystemCliCommandStatus>(),
     }),
   },
 };

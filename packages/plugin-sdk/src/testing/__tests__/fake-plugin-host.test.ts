@@ -5,7 +5,10 @@ import {
   type BbPluginApi,
   type PluginAgentConfigurationContext,
 } from "../../backend-contract.js";
-import { defineRpcContract } from "../../rpc-contract.js";
+import {
+  defineRpcContract,
+  experimental_PluginRpcRefusal,
+} from "../../rpc-contract.js";
 import { RESERVED_BB_CLI_COMMANDS } from "../../internal/host-policy.js";
 import {
   createFakePluginHost,
@@ -469,6 +472,18 @@ describe("settings", () => {
     ).toThrow('default for setting "broken" must be one of its options');
     expect(() =>
       bb.settings.define({
+        labelled: {
+          type: "select",
+          label: "L",
+          options: ["a"],
+          experimental_optionLabels: { a: "A", z: "Z" },
+        },
+      }),
+    ).toThrow(
+      'label for setting "labelled" names "z", which is not one of its options',
+    );
+    expect(() =>
+      bb.settings.define({
         pem: {
           type: "string",
           label: "Key",
@@ -608,6 +623,32 @@ describe("rpc", () => {
     await expect(harness.callRpc("nonFinite")).rejects.toMatchObject({
       code: "non_json_result",
     });
+  });
+
+  it("preserves typed refusals and does not invalidate refused writes", async () => {
+    const { bb, harness } = createFakePluginHost();
+    const contract = defineRpcContract({
+      save: {
+        input: z.null(),
+        output: z.null(),
+        invalidates: () => ["private"],
+      },
+    });
+    bb.rpc.register(contract, {
+      save: () => {
+        throw new experimental_PluginRpcRefusal({
+          code: "forbidden",
+          message: "Private",
+          issues: [{ message: "Caller denied" }],
+        });
+      },
+    });
+    await expect(harness.callRpc("save")).rejects.toMatchObject({
+      code: "forbidden",
+      message: "Private",
+      issues: [{ message: "Caller denied" }],
+    });
+    expect(harness.experimental_rpcInvalidations).toEqual([]);
   });
 
   it("rejects invalid and duplicate registrations", () => {

@@ -87,9 +87,20 @@ export const APP_COMMAND_GROUPS: readonly AppCommandGroup[] = [
         "Search the text shown in the current bb desktop window.",
       ),
       command(
+        "window.reload",
+        "Reload window",
+        "Reload the current bb desktop window.",
+      ),
+      command("history.back", "Go back", "Go back in this window's history."),
+      command(
+        "history.forward",
+        "Go forward",
+        "Go forward in this window's history.",
+      ),
+      command(
         "app.back",
         "Back to app",
-        "Return from Settings, Plugins, or Skills to the app.",
+        "Return from Settings, Plugins, Skills, or a plugin page with its own sidebar to the app.",
       ),
       command("settings.open", "Open settings", "Open bb settings."),
       command(
@@ -196,8 +207,8 @@ export const APP_COMMAND_GROUPS: readonly AppCommandGroup[] = [
       ),
       command(
         "logs.openServerDaemon",
-        "Open server and daemon logs",
-        "Open the desktop log viewer for the bb server and host daemon.",
+        "Open local logs",
+        "Open local desktop, server, and host daemon logs.",
       ),
       command(
         "dataDirectory.open",
@@ -218,6 +229,11 @@ export const APP_COMMAND_GROUPS: readonly AppCommandGroup[] = [
         "plugins.exitSafeMode",
         "Turn off plugin safe mode",
         "Restart the plugins that were enabled before safe mode.",
+      ),
+      command(
+        "plugins.pruneCache",
+        "Clean up plugin cache",
+        "Delete cached plugin versions that no installed plugin uses, such as versions left by earlier bb releases.",
       ),
     ],
   },

@@ -1,3 +1,5 @@
+import { rpcInvalidationTags } from "@get-bb/plugin-sdk/internal/rpc-tags";
+import type { ContractTagDeclarations } from "@bb/domain";
 import {
   environmentCompositionSchema,
   validateServerAccessProviderDeclaration,
@@ -116,6 +118,7 @@ import type {
 import type {
   BbSdk,
   ThreadForkArgs,
+  PluginThreadMetadataListArgs,
   ThreadPluginMetadataArgs,
   ThreadPluginMetadataUpdateArgs,
   ThreadSpawnArgs,
@@ -190,6 +193,7 @@ export interface PluginWebSocketRouteRecord {
 }
 
 export interface PluginRpcHandler {
+  declarations: ContractTagDeclarations<unknown, unknown>;
   publication: ReturnType<typeof publishRpcMethod>;
   inputSchema: StandardSchemaV1;
   outputSchema: StandardSchemaV1;
@@ -367,6 +371,16 @@ function wrapSdkForPlugin(
           pluginId: args.pluginId ?? pluginId,
         });
       },
+      async experimental_listPluginMetadata(
+        args: Omit<PluginThreadMetadataListArgs, "pluginId"> & {
+          pluginId?: string;
+        },
+      ) {
+        return sdk.threads.experimental_listPluginMetadata({
+          ...args,
+          pluginId: args.pluginId ?? pluginId,
+        });
+      },
       async updatePluginMetadata(
         args: Omit<ThreadPluginMetadataUpdateArgs, "pluginId"> & {
           pluginId?: string;
@@ -382,6 +396,9 @@ function wrapSdkForPlugin(
       },
       spawn(args: ThreadSpawnArgs) {
         return sdk.threads.spawn(withPluginThreadAttribution(args, pluginId));
+      },
+      send(args) {
+        return sdk.threads.send({ ...args, originPluginId: pluginId });
       },
     },
   };
@@ -481,6 +498,7 @@ export function createPluginApi(options: {
    * Revoked when the handle is invalidated.
    */
   rpcCaller: PluginRpcCallerCredential;
+  invalidateRpc: (tags: readonly string[] | null) => void;
   publishSignal: (channel: string, payload: unknown) => void;
   settingsChanged: () => void;
   reportNeedsConfiguration: (message: string) => void;
@@ -547,6 +565,7 @@ export function createPluginApi(options: {
     getLoopbackBaseUrl,
     rpcCaller,
     publishSignal,
+    invalidateRpc: optionsInvalidate,
     settingsChanged,
     reportNeedsConfiguration,
     isAgentToolNameTaken,
@@ -580,8 +599,10 @@ export function createPluginApi(options: {
   const databaseHandles: Database.Database[] = [];
   const threadEventHandlers: PluginThreadEventHandlers = {
     "experimental_thread.events": [],
+    "experimental_thread.parentChanged": [],
     "experimental_terminal.input": [],
     "experimental_host.deleted": [],
+    "experimental_environment.removed": [],
     "thread.created": [],
     "thread.active": [],
     "thread.idle": [],
@@ -822,6 +843,14 @@ export function createPluginApi(options: {
   };
 
   const rpc: PluginRpc = {
+    experimental_invalidate(tags) {
+      assertLive();
+      optionsInvalidate(rpcInvalidationTags.parse(tags));
+    },
+    experimental_invalidateAll() {
+      assertLive();
+      optionsInvalidate(null);
+    },
     register(contract, handlers, options) {
       assertLive();
       for (const [name, record] of normalizeRpcRegistration(

@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import { describe, expect, it, vi } from "vitest";
 import { definePluginApp } from "./plugin-app-definition";
 import {
@@ -57,6 +55,7 @@ function makeDeps(
   return {
     fetchCandidates: async () => candidates,
     importModule: async () => pluginModule(),
+    importRetryDelaysMs: [],
     applyCss: vi.fn(),
     retainCss: vi.fn(() => vi.fn()),
     resetCrashedSlots: vi.fn(),

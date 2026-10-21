@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { ClaudeContextUsageCollector } from "./context-usage.js";
+import { readIsolatedClaudeContextUsage } from "./context-usage-probe.js";
 
 import {
   type PendingInteractionGrantedPermissionProfile,
@@ -54,9 +55,18 @@ import {
   buildClaudeTurnParams,
   type ClaudeCodeSkillRoot,
 } from "../session-params.js";
-import { SdkSession, type SdkSessionOptions } from "./sdk-session.js";
+import {
+  isBypassPermissionsAvailable,
+  SdkSession,
+  type SdkSessionOptions,
+} from "./sdk-session.js";
 import { MissingClaudeCliError } from "./missing-cli-error.js";
 import { createClaudeCodeBridgeModelListMemo } from "./model-list.js";
+import {
+  PROVIDER_COMMANDS_STATE_KIND,
+  createClaudeCodeBridgeCommandListMemo,
+  toProviderCommandsState,
+} from "./provider-commands.js";
 import {
   claudeThreadForkParamsSchema,
   claudeThreadResumeParamsSchema,
@@ -80,11 +90,11 @@ import {
 } from "./provider-maintenance.js";
 import {
   buildChromeExtraArgs,
+  buildClaudeFeatureEnv,
   buildReadonlyDenialMessage,
   buildMutableFlagSettings,
   buildSessionOptions,
   buildWorkspaceWriteDenialMessage,
-  buildWorkspaceWriteSandbox,
   toSdkEffort,
   type BuildSessionOptionsArgs,
   type PermissionEscalationWorkContext,
@@ -223,12 +233,14 @@ interface ClaudeSessionRestart {
 }
 
 interface ThreadSession {
+  commandListGeneration: number;
   contextUsageCollector: ClaudeContextUsageCollector;
   session: SdkSession;
   attachment: ThreadAttachment;
   sessionSerial: number;
   closing: boolean;
   restartBeforeNextTurn: ClaudeSessionRestart | null;
+  launchedWithBypassPermissions: boolean;
   recoveryHintRaisedThisTurn: "authRequired" | "rateLimited" | null;
   streamEnded: boolean;
   translator: ClaudeDeltaTranslator;
@@ -253,6 +265,7 @@ interface ThreadAttachment {
   liveSettings: ClaudeLiveSessionSettings;
   approvedPlanPermissionMode: ClaudePermissionMode;
   providerThreadId?: string;
+  publishedProviderCommands: string | null;
   sessionPermissionGrants: ClaudeSessionPermissionGrant[];
   threadIdRef: ThreadIdRef;
 }
@@ -395,8 +408,6 @@ function requireSkillPluginsRoot(): string {
 
 const THREAD_STOP_CLOSE_TIMEOUT_MS = 4_000;
 const CLAUDE_CHROME_SETTING_RESTART_REASON = "Claude in Chrome setting changed";
-const CLAUDE_SANDBOX_SETTING_RESTART_REASON =
-  "Claude Code sandbox setting changed";
 
 const { send, sendResult, sendError } = createBridgeIo<
   BridgeEventNotification | BridgeToolCallRequest
@@ -411,6 +422,7 @@ function resolvePendingSessionWork(
   threadSession: ThreadSession,
   message: string,
 ): void {
+  threadSession.contextUsageCollector.cancel();
   toolCallTracker.resolvePendingToolCalls(threadSession, message);
   resolvePendingInteractiveRequests(threadSession, message);
 }
@@ -447,10 +459,7 @@ function applyContextWindowSetting(
     return;
   }
   sessionOptions.disable1MContext = disabled;
-  attachment.sessionOptions.env = {
-    ...attachment.sessionOptions.env,
-    CLAUDE_CODE_DISABLE_1M_CONTEXT: disabled ? "1" : "0",
-  };
+  refreshSessionEnv(attachment);
   if (attachment.residentSession) {
     attachment.residentSession.restartBeforeNextTurn = {
       reason: "Claude Code 1M context setting changed",
@@ -459,44 +468,49 @@ function applyContextWindowSetting(
   }
 }
 
-function applySandboxSetting(
+function applyArtifactSetting(
   attachment: ThreadAttachment,
   enabled: boolean | undefined,
 ): void {
   const sessionOptions = attachment.sessionConstructionConfig.sessionOptions;
-  if (enabled === undefined || sessionOptions.sandboxEnabled === enabled) {
+  if (enabled === undefined || sessionOptions.artifactsEnabled === enabled) {
     return;
   }
-  sessionOptions.sandboxEnabled = enabled;
-  const sandbox = buildWorkspaceWriteSandbox({
-    ...sessionOptions,
-    permissionMode: attachment.approvedPlanPermissionMode,
-  });
-  if (sandbox) {
-    attachment.sessionOptions.sandbox = sandbox;
-  } else {
-    delete attachment.sessionOptions.sandbox;
-  }
+  sessionOptions.artifactsEnabled = enabled;
+  refreshSessionEnv(attachment);
   if (attachment.residentSession) {
     attachment.residentSession.restartBeforeNextTurn = {
-      reason: CLAUDE_SANDBOX_SETTING_RESTART_REASON,
+      reason: "Claude Artifacts setting changed",
       showRuntimeNote: false,
     };
   }
 }
 
-function applyPermissionSettings(
+function refreshSessionEnv(attachment: ThreadAttachment): void {
+  attachment.sessionOptions.env = {
+    ...buildSessionEnv(
+      readConfigEnvOverrides(attachment.sessionConstructionConfig.config),
+    ),
+    ...buildClaudeFeatureEnv(
+      attachment.sessionConstructionConfig.sessionOptions,
+    ),
+  };
+}
+
+async function applyPermissionSettings(
   attachment: ThreadAttachment,
   params: TurnStartParams | TurnSteerParams,
-): boolean {
+): Promise<boolean> {
   const construction = attachment.sessionConstructionConfig.sessionOptions;
   const writeRoots =
     params.permissionScope === "workspace"
       ? params.additionalWorkspaceWriteRoots
       : [];
+  const sandboxEnabled = params.sandboxEnabled ?? construction.sandboxEnabled;
   if (
     attachment.approvedPlanPermissionMode === params.permissionMode &&
     construction.permissionScope === params.permissionScope &&
+    construction.sandboxEnabled === sandboxEnabled &&
     isDeepStrictEqual(
       construction.additionalWorkspaceWriteRoots ?? [],
       writeRoots,
@@ -506,22 +520,54 @@ function applyPermissionSettings(
   }
   const permissionMode =
     attachment.permissionMode === "plan" ? "plan" : params.permissionMode;
-  construction.permissionMode = permissionMode;
-  construction.permissionScope = params.permissionScope;
-  construction.additionalWorkspaceWriteRoots = writeRoots;
-  attachment.permissionMode = permissionMode;
-  attachment.approvedPlanPermissionMode = params.permissionMode;
-  attachment.sessionPermissionGrants = [];
+  const nextConstruction = {
+    ...construction,
+    permissionMode,
+    permissionScope: params.permissionScope,
+    additionalWorkspaceWriteRoots: writeRoots,
+    sandboxEnabled,
+  };
   const rebuilt = buildSessionOptions(
     {
-      ...construction,
+      ...nextConstruction,
       ...attachment.liveSettings,
       permissionMode: params.permissionMode,
     },
     attachment.sessionOptions.env ?? {},
   );
+  const permissionSettings = {
+    sandbox: rebuilt.sandbox ?? { enabled: false },
+    permissions: {
+      additionalDirectories: [...(rebuilt.additionalDirectories ?? [])],
+    },
+  };
+  attachment.sessionPermissionGrants = [];
+  const resident = attachment.residentSession;
+  const needsRestart =
+    params.permissionMode === "bypassPermissions" &&
+    resident !== null &&
+    !resident.launchedWithBypassPermissions;
+  if (resident && !needsRestart) {
+    await resident.session.applyPermissionSettings(permissionSettings);
+    if (attachment.permissionMode !== permissionMode) {
+      await resident.session.setPermissionMode(permissionMode);
+    }
+  }
+  resident?.translator.configureSandbox(rebuilt.sandbox?.enabled === true);
+  attachment.sessionConstructionConfig.sessionOptions = nextConstruction;
+  attachment.permissionMode = permissionMode;
+  attachment.approvedPlanPermissionMode = params.permissionMode;
+  const currentSettings =
+    typeof attachment.sessionOptions.settings === "object"
+      ? attachment.sessionOptions.settings
+      : {};
+  attachment.sessionOptions.settings = {
+    ...currentSettings,
+    ...permissionSettings,
+  };
   attachment.sessionOptions.permissionMode = permissionMode;
-  attachment.sessionOptions.allowBypassPermissions = rebuilt.allowBypassPermissions;
+  attachment.sessionOptions.allowBypassPermissions =
+    rebuilt.allowBypassPermissions;
   if (rebuilt.sandbox) {
     attachment.sessionOptions.sandbox = rebuilt.sandbox;
   } else {
@@ -533,13 +579,13 @@ function applyPermissionSettings(
   } else {
     delete attachment.sessionOptions.additionalDirectories;
   }
-  if (attachment.residentSession) {
-    attachment.residentSession.restartBeforeNextTurn = {
+  if (resident && needsRestart) {
+    resident.restartBeforeNextTurn = {
       reason: "Claude Code permissions changed",
       showRuntimeNote: false,
     };
   }
-  return true;
+  return needsRestart;
 }
 
 function createForwardToolCall(getThreadId: () => string): ToolCallForwarder {
@@ -765,9 +811,12 @@ async function applyLiveSessionSettings(
   threadSession.attachment.liveSettings = next;
 }
 
-const MODEL_LIST_MEMO_TTL_MS = 2 * 60_000;
+const PROVIDER_CATALOG_MEMO_TTL_MS = 2 * 60_000;
+const listCommandsMemoized = createClaudeCodeBridgeCommandListMemo({
+  ttlMs: PROVIDER_CATALOG_MEMO_TTL_MS,
+});
 const listModelsMemoized = createClaudeCodeBridgeModelListMemo({
-  ttlMs: MODEL_LIST_MEMO_TTL_MS,
+  ttlMs: PROVIDER_CATALOG_MEMO_TTL_MS,
 });
 
 function sendThreadDeltas(
@@ -967,6 +1016,7 @@ function toSessionConstructionConfig(
       baseInstructions: params.baseInstructions,
       chromeEnabled: params.chromeEnabled,
       disable1MContext: params.disable1MContext,
+      artifactsEnabled: params.artifactsEnabled,
       cwd: params.cwd,
       instructionMode: params.instructionMode,
       permissionMode: params.permissionMode,
@@ -1038,6 +1088,7 @@ function createThreadAttachment(
     ...(args.providerThreadId
       ? { providerThreadId: args.providerThreadId }
       : {}),
+    publishedProviderCommands: null,
     sessionPermissionGrants: [],
     threadIdRef: args.threadIdRef,
   };
@@ -1072,12 +1123,16 @@ function createThreadSession(attachment: ThreadAttachment): ThreadSession {
     })),
   );
   const threadSession: ThreadSession = {
+    commandListGeneration: 0,
     contextUsageCollector: new ClaudeContextUsageCollector(),
     session,
     attachment,
     sessionSerial,
     closing: false,
     restartBeforeNextTurn: null,
+    launchedWithBypassPermissions:
+      attachment.sessionOptions.allowBypassPermissions &&
+      isBypassPermissionsAvailable(),
     recoveryHintRaisedThisTurn: null,
     streamEnded: false,
     translator,
@@ -1337,9 +1392,11 @@ function buildTrackedSessionOptions(
     {
       ...toSessionConstructionConfig(params).sessionOptions,
       ...toInitialLiveSessionSettings(params),
+      permissionMode: params.approvedPlanPermissionMode,
     },
     env,
   );
+  sessionOptions.permissionMode = params.permissionMode;
   sessionOptions.hooks = buildSessionTrackingHooks(threadIdRef);
   sessionOptions.recordThreadId = () => threadIdRef.current;
   return sessionOptions;
@@ -1446,6 +1503,46 @@ function getCurrentThreadSession(
   return threadSession;
 }
 
+function publishProviderCommands(
+  threadSession: ThreadSession,
+  commands: unknown,
+): void {
+  if (threadSession.closing) {
+    return;
+  }
+  const state = toProviderCommandsState(commands);
+  const serialized = JSON.stringify(state);
+  const { attachment } = threadSession;
+  if (
+    attachment.publishedProviderCommands === serialized ||
+    (attachment.publishedProviderCommands === null &&
+      state.commands.length === 0)
+  ) {
+    return;
+  }
+  attachment.publishedProviderCommands = serialized;
+  sendThreadDeltas(attachment.threadIdRef.current, [
+    {
+      kind: "extension.state",
+      extensionKind: PROVIDER_COMMANDS_STATE_KIND,
+      payload: state,
+    },
+  ]);
+}
+
+function refreshProviderCommands(threadSession: ThreadSession): void {
+  threadSession.commandListGeneration += 1;
+  const generation = threadSession.commandListGeneration;
+  void threadSession.session.supportedCommands().then(
+    (commands) => {
+      if (generation === threadSession.commandListGeneration) {
+        publishProviderCommands(threadSession, commands);
+      }
+    },
+    () => {},
+  );
+}
+
 function createOnSdkMessage(
   args: CreateSdkCallbackArgs,
 ): (message: SDKMessage) => void {
@@ -1483,6 +1580,15 @@ function createOnSdkMessage(
       threadId: args.threadIdRef.current,
       message,
     });
+    if (message.type === "system" && message.subtype === "init") {
+      refreshProviderCommands(threadSession);
+    } else if (
+      message.type === "system" &&
+      message.subtype === "commands_changed"
+    ) {
+      threadSession.commandListGeneration += 1;
+      publishProviderCommands(threadSession, message.commands);
+    }
     if (
       message.type === "result" ||
       (message.type === "system" &&
@@ -1500,7 +1606,15 @@ function createOnSdkMessage(
       }
       if (providerThreadId) {
         void threadSession.contextUsageCollector.capture({
-          read: () => threadSession.session.getContextUsage(),
+          read: (signal) =>
+            readIsolatedClaudeContextUsage({
+              sessionOptions: threadSession.attachment.sessionOptions,
+              providerSessionId: providerThreadId,
+              dynamicTools:
+                threadSession.attachment.sessionConstructionConfig
+                  .dynamicTools ?? [],
+              signal,
+            }),
           providerSessionId: providerThreadId,
           isCurrent: () =>
             getCurrentThreadSession({
@@ -1648,13 +1762,7 @@ function applyTurnEnvironment(
     ...attachment.sessionConstructionConfig,
     config,
   };
-  attachment.sessionOptions.env = {
-    ...buildSessionEnv(envOverrides),
-    CLAUDE_CODE_DISABLE_1M_CONTEXT: attachment.sessionConstructionConfig
-      .sessionOptions.disable1MContext
-      ? "1"
-      : "0",
-  };
+  refreshSessionEnv(attachment);
   if (attachment.residentSession) {
     attachment.residentSession.restartBeforeNextTurn = {
       reason:
@@ -1936,22 +2044,19 @@ async function enterPlanModeIfRequested(
   threadSession.attachment.permissionMode = "plan";
 }
 
-function restoreApprovedPlanPermissionMode(threadSession: ThreadSession): void {
-  if (
-    threadSession.attachment.permissionMode ===
-    threadSession.attachment.approvedPlanPermissionMode
-  ) {
+async function restoreApprovedPlanPermissionMode(
+  threadSession: ThreadSession,
+): Promise<void> {
+  const attachment = threadSession.attachment;
+  if (attachment.permissionMode === attachment.approvedPlanPermissionMode) {
     return;
   }
-  threadSession.attachment.permissionMode =
-    threadSession.attachment.approvedPlanPermissionMode;
-  void threadSession.session
-    .setPermissionMode(threadSession.attachment.approvedPlanPermissionMode)
-    .catch((error: unknown) => {
-      logBridgeError(
-        `Failed to leave Plan mode: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
+  await threadSession.session.setPermissionMode(
+    attachment.approvedPlanPermissionMode,
+  );
+  attachment.permissionMode = attachment.approvedPlanPermissionMode;
+  attachment.sessionConstructionConfig.sessionOptions.permissionMode =
+    attachment.permissionMode;
 }
 
 function createCanUseTool(threadIdRef: ThreadIdRef): CanUseTool {
@@ -2060,7 +2165,10 @@ function createCanUseTool(threadIdRef: ThreadIdRef): CanUseTool {
       };
     }
 
-    if (threadSession.attachment.permissionMode === "bypassPermissions") {
+    if (
+      threadSession.attachment.permissionMode === "bypassPermissions" &&
+      !isBypassPermissionsAvailable()
+    ) {
       return {
         behavior: "allow",
         updatedInput: input,
@@ -2112,6 +2220,7 @@ async function handleRequest(request: ClaudeCodeJsonRpcRequest): Promise<void> {
           grammarVersions: [THREAD_DELTA_GRAMMAR_V3, THREAD_DELTA_GRAMMAR_V3],
           steerMode: "inject",
           skills: { configure: true },
+          commands: { list: true },
         },
       };
       sendResult(request.id, result);
@@ -2119,6 +2228,21 @@ async function handleRequest(request: ClaudeCodeJsonRpcRequest): Promise<void> {
     case "model/list":
       try {
         sendResult(request.id, await listModelsMemoized());
+      } catch (error) {
+        if (error instanceof MissingClaudeCliError) {
+          sendError(
+            request.id,
+            BRIDGE_JSON_RPC_ERRORS.MISSING_EXECUTABLE,
+            error.message,
+          );
+          break;
+        }
+        throw error;
+      }
+      break;
+    case "commands/list":
+      try {
+        sendResult(request.id, await listCommandsMemoized(request.params.cwd));
       } catch (error) {
         if (error instanceof MissingClaudeCliError) {
           sendError(
@@ -2385,15 +2509,25 @@ async function runTurnInput(
     }
     applyChromeSetting(attachment, params.chromeEnabled);
     applyContextWindowSetting(attachment, params.disable1MContext);
-    applySandboxSetting(attachment, params.sandboxEnabled);
+    applyArtifactSetting(attachment, params.artifactsEnabled);
   }
 
-  const permissionsChanged = attachment
-    ? applyPermissionSettings(attachment, params)
-    : false;
+  let permissionRestartRequired = false;
+  try {
+    permissionRestartRequired = attachment
+      ? await applyPermissionSettings(attachment, params)
+      : false;
+  } catch (error) {
+    sendError(
+      id,
+      -32000,
+      error instanceof Error ? error.message : String(error),
+    );
+    return;
+  }
   const threadSession = await getWritableThreadSession(
     params.threadId,
-    permissionsChanged ? "new-turn" : intent,
+    permissionRestartRequired ? "new-turn" : intent,
   );
   if (!threadSession) {
     sendError(id, -32000, "No active session");
@@ -2637,7 +2771,14 @@ function handleParsedMessage(parsed: unknown): void {
       pending.toolName === CLAUDE_EXIT_PLAN_MODE_TOOL_NAME &&
       interactiveResponse.behavior === "allow"
     ) {
-      restoreApprovedPlanPermissionMode(threadSession);
+      void restoreApprovedPlanPermissionMode(threadSession).catch(
+        (error: unknown) => {
+          const message = `Failed to leave Plan mode: ${error instanceof Error ? error.message : String(error)}`;
+          sendThreadDeltas(threadSession.attachment.threadIdRef.current, [
+            { kind: "provider.error", message },
+          ]);
+        },
+      );
     }
 
     pending.resolve(

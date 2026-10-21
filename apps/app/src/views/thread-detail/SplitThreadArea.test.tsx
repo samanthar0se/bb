@@ -34,7 +34,6 @@ import {
 import type { LayoutNode, PaneContent, SplitLayout } from "@/lib/split-layout";
 import { usePromptDraftStorage } from "@/hooks/usePromptDraftStorage";
 import { createBbDesktopApi } from "@/test/bb-desktop-test-utils";
-import { resourceRouteLabelAtom } from "@/components/layout/resourceRouteLabelAtom";
 import {
   resetPluginSlotStoreForTest,
   setPluginSlotRegistrations,
@@ -52,6 +51,7 @@ import { RouteNavigationProvider } from "@/components/ui/app-route-anchor";
 import { SplitThreadArea } from "./SplitThreadArea";
 import { applyThreadOpenToLayout } from "./splitThreadNavigation";
 import { makePluginRegistrationSet } from "@/test/fixtures/plugins";
+import { LocationProbe } from "@/test/location-probe";
 
 const threadStore = vi.hoisted(
   () =>
@@ -198,6 +198,9 @@ vi.mock("react-resizable-panels", async () => {
 
 vi.mock("@/components/ui/sidebar.js", () => ({
   useIsSidebarShowing: () => sidebarState.showing,
+  useOptionalIsSidebarShowing: () => sidebarState.showing,
+  useSidebarKeepsCollapsedRail: () => false,
+  useIsSidebarFramed: () => false,
 }));
 
 vi.mock("@/views/RootComposeView", () => ({
@@ -265,8 +268,8 @@ vi.mock("@/components/plugin/PluginPanelRightPanelHost", () => ({
   },
 }));
 
-vi.mock("./ThreadDetailView", () => ({
-  ThreadDetailView: ({
+vi.mock("./LazyThreadDetailView", () => ({
+  LazyThreadDetailView: ({
     projectId = "proj_personal",
     threadId = "thr-a",
     timelineEnabled = true,
@@ -641,11 +644,6 @@ function registerDocsPanel() {
   );
 }
 
-function LocationProbe() {
-  const location = useLocation();
-  return <div data-testid="location">{location.pathname}</div>;
-}
-
 function ExternalNav({ to }: { to: string }) {
   const navigate = useNavigate();
   return (
@@ -756,6 +754,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.dispatchEvent(new Event("pagehide"));
   vi.restoreAllMocks();
   threadStore.clear();
   resetPluginSlotStoreForTest();
@@ -934,7 +933,7 @@ describe("SplitThreadArea", () => {
     });
 
     expect(screen.queryByTestId("mock-collapsed-thread-rail")).toBeNull();
-    fireEvent.click(screen.getByTestId("maximize-thr-a"));
+    fireEvent.click(await screen.findByTestId("maximize-thr-a"));
 
     expect(screen.getByTestId("maximize-thr-a").textContent).toBe("restore");
     await waitFor(() => {
@@ -978,7 +977,7 @@ describe("SplitThreadArea", () => {
     await waitFor(() => expect(hiddenScroller.scrollTop).toBe(0));
   });
 
-  it("stops the restore loop once positions settle instead of burning 30 frames", () => {
+  it("stops the restore loop once positions settle instead of burning 30 frames", async () => {
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
@@ -1003,7 +1002,7 @@ describe("SplitThreadArea", () => {
       path: threadPath("thr-a"),
       layout: twoPaneLayout("pane-1"),
     });
-    const hiddenScroller = screen.getByTestId("scroll-thr-b");
+    const hiddenScroller = await screen.findByTestId("scroll-thr-b");
     hiddenScroller.scrollTop = 12;
     fireEvent.scroll(hiddenScroller);
 
@@ -1675,8 +1674,10 @@ describe("SplitThreadArea", () => {
     });
 
     const toggle = await screen.findByTestId("split-workspace-panel-toggle");
-    expect(toggle.querySelector("button")?.getAttribute("aria-expanded")).toBe(
-      "true",
+    await waitFor(() =>
+      expect(
+        toggle.querySelector("button")?.getAttribute("aria-expanded"),
+      ).toBe("true"),
     );
     expect(
       screen.queryByTestId("split-workspace-empty-panel-state"),
@@ -2539,9 +2540,13 @@ describe("SplitThreadArea", () => {
       (await screen.findByText(path))
         .closest("header")
         ?.querySelector('[data-testid="app-page-header-content-row"]');
-    expect((await contentRow("top-left"))?.className).toContain("pl-[104px]");
+    expect((await contentRow("top-left"))?.className).toContain(
+      "pl-(--bb-macos-collapsed-top-left-reserve)",
+    );
     for (const path of ["top-right", "bottom-left", "bottom-right"]) {
-      expect((await contentRow(path))?.className).not.toContain("pl-[104px]");
+      expect((await contentRow(path))?.className).not.toContain(
+        "pl-(--bb-macos-collapsed-top-left-reserve)",
+      );
     }
 
     expect(screen.getAllByRole("button", { name: /Full Screen/ })).toHaveLength(
@@ -2709,7 +2714,7 @@ describe("SplitThreadArea", () => {
     );
   });
 
-  it("uses automation breadcrumbs in the split-owned plugin header", async () => {
+  it("uses page-owned breadcrumbs in the split-owned plugin header", async () => {
     setPluginSlotRegistrations(
       "automations",
       makePluginRegistrationSet({
@@ -2720,6 +2725,12 @@ describe("SplitThreadArea", () => {
             icon: "Clock",
             path: "automations",
             component: () => <div>Automation detail</div>,
+            experimental_usePageTitle: () => ({
+              breadcrumbs: [
+                { label: "Installed", to: "/plugins/automations/automations" },
+                { label: "Weekly review" },
+              ],
+            }),
           },
         ],
         threadPanelActions: [],
@@ -2734,7 +2745,7 @@ describe("SplitThreadArea", () => {
       panelPath: "automations",
       subPath: "proj_personal/weekly-review",
     };
-    const store = renderSplitArea({
+    renderSplitArea({
       path: "/plugins/automations/automations/proj_personal/weekly-review",
       layout: {
         root: { type: "pane", paneId: "pane-automation", content },
@@ -2746,14 +2757,9 @@ describe("SplitThreadArea", () => {
     const breadcrumb = await screen.findByRole("navigation", {
       name: "Breadcrumb",
     });
-    expect(breadcrumb.textContent).toContain("Automations");
     expect(breadcrumb.textContent).toContain("Installed");
-    expect(breadcrumb.textContent).toContain("weekly-review");
-
-    store.set(resourceRouteLabelAtom, "Weekly review");
-    await waitFor(() =>
-      expect(breadcrumb.textContent).toContain("Weekly review"),
-    );
+    expect(breadcrumb.textContent).toContain("Weekly review");
+    expect(screen.getByText("Automations")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("link", { name: "Installed" }));
     expect(screen.getByTestId("location").textContent).toBe(
@@ -2891,7 +2897,7 @@ describe("SplitThreadArea", () => {
       externalTo: threadPath("thr-c"),
     });
 
-    expect(screen.getByTestId("pane-thr-b")).toBeTruthy();
+    expect(await screen.findByTestId("pane-thr-b")).toBeTruthy();
     fireEvent.click(screen.getByTestId("external-nav"));
 
     expect(await screen.findByTestId("pane-thr-c")).toBeTruthy();

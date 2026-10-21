@@ -62,51 +62,52 @@ describe("public ui preferences", () => {
     },
   );
 
-  it.each(["__automatic__", "__builtin__", "garden/icons"])(
-    "keeps navigation selection %s, reading legacy built-in as the bundled plugin",
-    async (previous) => {
-      await withTestHarness(async (harness) => {
-        const key = "sidebar.navigationProvider";
-        const expected =
-          previous === "__builtin__" ? "navigation/navigation" : previous;
-        expect(await readJson(await listPreferences(harness))).toMatchObject({
-          preferences: {
-            [key]: { revision: 0, value: "__automatic__" },
-          },
-        });
-        overwriteStoredUiPreference(harness.deps.db, {
-          key,
-          valueJson: JSON.stringify(previous),
-        });
-        expect(await readJson(await listPreferences(harness))).toMatchObject({
-          preferences: { [key]: { revision: 1, value: expected } },
-        });
+  it("ignores stored rows for the retired sidebar header preference", async () => {
+    await withTestHarness(async (harness) => {
+      const key = "sidebar.headerProvider";
+      overwriteStoredUiPreference(harness.deps.db, {
+        key,
+        valueJson: JSON.stringify("garden/icons"),
       });
-    },
-  );
+      harness.deps.db.$client
+        .prepare(
+          "INSERT INTO ui_preference_defaults (key, value_json) VALUES (?, ?)",
+        )
+        .run(key, JSON.stringify("garden/icons"));
+      const listed = await listPreferences(harness);
+      expect(listed.status).toBe(200);
+      const body = (await readJson(listed)) as {
+        preferences: Record<string, unknown>;
+      };
+      expect(Object.keys(body.preferences).sort()).toEqual(
+        [...UI_PREFERENCE_KEYS].sort(),
+      );
+      expect(body.preferences).not.toHaveProperty([key]);
+      expect(
+        (
+          await putPreference(harness, key, {
+            expectedRevision: 1,
+            value: "garden/icons",
+          })
+        ).status,
+      ).toBe(404);
+    });
+  });
 
-  it.each([
-    ["__automatic__", "__builtin__"],
-    ["__builtin__", "__builtin__"],
-    ["garden/icons", "garden/icons"],
-  ])(
-    "keeps the sidebar header opt-in: %s resolves to %s",
-    async (previous, expected) => {
-      await withTestHarness(async (harness) => {
-        const key = "sidebar.headerProvider";
-        expect(await readJson(await listPreferences(harness))).toMatchObject({
-          preferences: { [key]: { revision: 0, value: "__builtin__" } },
-        });
-        overwriteStoredUiPreference(harness.deps.db, {
-          key,
-          valueJson: JSON.stringify(previous),
-        });
-        expect(await readJson(await listPreferences(harness))).toMatchObject({
-          preferences: { [key]: { revision: 1, value: expected } },
-        });
+  it("reads sidebar provider rows stored before the rail and resolves the removed built-in to Automatic", async () => {
+    await withTestHarness(async (harness) => {
+      overwriteStoredUiPreference(harness.deps.db, {
+        key: "sidebar.navigationProvider",
+        valueJson: JSON.stringify("navigation/navigation"),
       });
-    },
-  );
+      const body = (await readJson(await listPreferences(harness))) as {
+        preferences: Record<string, { value: unknown }>;
+      };
+      expect(body.preferences["sidebar.navigationProvider"]?.value).toBe(
+        "__automatic__",
+      );
+    });
+  });
 
   it("persists hidden groups across organizations without changing saved order", async () => {
     await withTestHarness(async (harness) => {
@@ -358,7 +359,7 @@ describe("public ui preferences", () => {
 
   it("writes with revision checks, broadcasts, and rejects stale writes", async () => {
     await withTestHarness(async (harness) => {
-      const notifySystem = vi.spyOn(harness.hub, "notifySystem");
+      const notifyTags = vi.spyOn(harness.hub, "notifyTags");
 
       const first = await putPreference(harness, "sidebar.organizationMode", {
         expectedRevision: 0,
@@ -370,7 +371,7 @@ describe("public ui preferences", () => {
         revision: 1,
         value: "machine",
       });
-      expect(notifySystem).toHaveBeenCalledWith(["ui-preferences-changed"]);
+      expect(notifyTags).toHaveBeenCalledWith(["ui-preferences"]);
 
       const stale = await putPreference(harness, "sidebar.organizationMode", {
         expectedRevision: 0,
@@ -382,7 +383,7 @@ describe("public ui preferences", () => {
         details: { currentRevision: 1 },
         message: "UI preference changed on another client",
       });
-      expect(notifySystem).toHaveBeenCalledTimes(1);
+      expect(notifyTags).toHaveBeenCalledTimes(1);
 
       const listed = (await readJson(await listPreferences(harness))) as {
         preferences: Record<string, { revision: number; value: unknown }>;
@@ -418,14 +419,14 @@ describe("public ui preferences", () => {
 
       const invalidList = await putPreference(
         harness,
-        "sidebar.collapsedThreads",
+        "sidebar.hiddenFooterItems",
         { expectedRevision: 0, value: ["thr_1", 2] },
       );
       expect(invalidList.status).toBe(400);
 
       const missingValue = await putPreference(
         harness,
-        "sidebar.collapsedThreads",
+        "sidebar.hiddenFooterItems",
         { expectedRevision: 0, value: undefined },
       );
       expect(missingValue.status).toBe(400);

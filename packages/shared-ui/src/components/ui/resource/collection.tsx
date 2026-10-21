@@ -1,3 +1,4 @@
+import { ExpandableText } from "../expandable-text";
 import type { ReactNode, Ref } from "react";
 import { Button, type ButtonProps } from "../button";
 import { ScrollArea } from "../scroll-area";
@@ -212,26 +213,26 @@ export function ResourceBrowseGrid({
 export function ResourceSourceShelf({
   label,
   description,
-  hideDescriptionOnMobile = false,
+  hideDescriptionWhenNarrow = false,
   leading,
   browseAction,
   children,
 }: {
   label: ReactNode;
   description?: ReactNode;
-  hideDescriptionOnMobile?: boolean;
+  hideDescriptionWhenNarrow?: boolean;
   leading?: ReactNode;
   browseAction?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <section className="w-full max-w-full space-y-[var(--resource-source-shelf-section-gap)] text-popover-foreground">
+    <section className="@container/resource-shelf w-full max-w-full space-y-[var(--resource-source-shelf-section-gap)] text-popover-foreground">
       <div className="flex min-w-0 items-end gap-[var(--resource-source-shelf-label-gap)] px-[var(--resource-source-shelf-header-inset,var(--resource-source-shelf-inset))] text-xs text-muted-foreground">
         <div
           className={cn(
             "min-w-0 flex-1",
-            hideDescriptionOnMobile
-              ? "sm:space-y-[var(--resource-source-shelf-section-gap)]"
+            hideDescriptionWhenNarrow
+              ? "@min-[40rem]/resource-shelf:space-y-[var(--resource-source-shelf-section-gap)]"
               : "space-y-[var(--resource-source-shelf-section-gap)]",
           )}
         >
@@ -245,7 +246,9 @@ export function ResourceSourceShelf({
             <div
               className={cn(
                 "min-w-0 items-center gap-3",
-                hideDescriptionOnMobile ? "hidden sm:flex" : "flex",
+                hideDescriptionWhenNarrow
+                  ? "hidden @min-[40rem]/resource-shelf:flex"
+                  : "flex",
               )}
             >
               <p className="min-w-0 max-w-2xl text-xs leading-relaxed text-muted-foreground">
@@ -299,12 +302,13 @@ type ResourceBrowseCardProps = {
   leadingClassName?: string;
   title: ReactNode;
   description?: ReactNode;
-  descriptionLines?: 2 | 3;
+  descriptionLines?: 2 | 3 | "expandable";
   byline?: ReactNode;
   headerAction?: ReactNode;
   footerMeta?: ReactNode;
   footer?: ReactNode;
   pointerOnlyOpen?: boolean;
+  disabled?: boolean;
 } & (
   | { openLabel: string; onOpen: (trigger: HTMLButtonElement) => void }
   | { openLabel?: undefined; onOpen?: undefined }
@@ -322,6 +326,7 @@ export function ResourceBrowseCard({
   footerMeta,
   footer,
   pointerOnlyOpen = false,
+  disabled = false,
   openLabel,
   onOpen,
 }: ResourceBrowseCardProps) {
@@ -332,6 +337,7 @@ export function ResourceBrowseCard({
       className={cn(
         "group relative grid min-h-28 w-full grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_1fr_auto] gap-2 rounded-lg border border-border bg-card p-3 text-left",
         onOpen &&
+          !disabled &&
           "transition-[border-color,box-shadow,background-color] duration-150 hover:border-foreground/30 hover:bg-[color-mix(in_oklab,var(--ink)_2.5%,transparent)] hover:shadow-sm",
         className,
       )}
@@ -339,12 +345,13 @@ export function ResourceBrowseCard({
       {onOpen ? (
         <button
           type="button"
+          disabled={disabled}
           aria-label={pointerOnlyOpen ? undefined : openLabel}
           aria-hidden={pointerOnlyOpen || undefined}
           tabIndex={pointerOnlyOpen ? -1 : undefined}
           data-resource-card-pointer-action={pointerOnlyOpen ? "" : undefined}
           onClick={(event) => onOpen(event.currentTarget)}
-          className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default"
         />
       ) : null}
       {hasLeading ? (
@@ -376,10 +383,18 @@ export function ResourceBrowseCard({
         <span
           className={cn(
             "pointer-events-none relative col-span-2 row-start-2 self-center text-left text-xs leading-snug text-muted-foreground",
-            descriptionLines === 3 ? "line-clamp-3" : "line-clamp-2",
+            descriptionLines === "expandable"
+              ? "break-words"
+              : descriptionLines === 3
+                ? "line-clamp-3"
+                : "line-clamp-2",
           )}
         >
-          {description}
+          {descriptionLines === "expandable" ? (
+            <ExpandableText>{description}</ExpandableText>
+          ) : (
+            description
+          )}
         </span>
       ) : null}
       {byline ? (

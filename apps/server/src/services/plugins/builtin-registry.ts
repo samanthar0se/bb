@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { RETIRED_PLUGIN_SUCCESSORS } from "@bb/domain";
 
 export interface BundledPluginDefinition {
   name: string;
@@ -34,6 +35,11 @@ export function accountPoolDefaultEnabled(
 const REPO_PLUGINS_DIRECTORY_NAME = "plugins";
 
 export const BUILTIN_PLUGINS = [
+  {
+    name: "storage-retention",
+    pluginId: "bb--storage-retention",
+    defaultEnabled: false,
+  },
   {
     name: "bb-guide",
     pluginId: "bb-guide",
@@ -175,6 +181,16 @@ export const BUILTIN_PLUGINS = [
     defaultEnabled: true,
   },
   {
+    name: "prompt-library",
+    pluginId: "bb--prompt-library",
+    defaultEnabled: false,
+  },
+  {
+    name: "mcp",
+    pluginId: "bb--mcp",
+    defaultEnabled: false,
+  },
+  {
     name: "scheduled-send",
     pluginId: "scheduled-send",
     defaultEnabled: true,
@@ -249,6 +265,27 @@ export const BUNDLED_PLUGINS: readonly BundledPluginDefinition[] = [
   ...BUILTIN_PLUGINS,
   ...OFFICIAL_PLUGINS,
 ];
+
+export interface RetiredBundledPlugin {
+  pluginId: string;
+  successorPluginId: string;
+  carriedSettings: readonly string[];
+}
+
+const RETIRED_PLUGIN_CARRIED_SETTINGS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  "bb--provider-acp-next": ["customAgents"],
+};
+
+export const RETIRED_BUNDLED_PLUGINS: readonly RetiredBundledPlugin[] =
+  Object.entries(RETIRED_PLUGIN_SUCCESSORS).map(
+    ([pluginId, successorPluginId]) => ({
+      pluginId,
+      successorPluginId,
+      carriedSettings: RETIRED_PLUGIN_CARRIED_SETTINGS[pluginId] ?? [],
+    }),
+  );
 
 const builtinPluginsModuleDir = path.dirname(fileURLToPath(import.meta.url));
 

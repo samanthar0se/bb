@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { nanoid } from "nanoid";
 import {
   usePendingAttachmentUploads,
   type PendingAttachmentUpload,
@@ -11,6 +12,7 @@ import type { InlineComposerDraftSession } from "./useActiveComposerDraft";
 
 interface UseComposerAttachmentUploadsArgs {
   projectId: string;
+  draftStorageKey: string;
   addDraftAttachment: (attachment: PromptDraftAttachment) => void;
   inlineEditSessionId: number | null;
   inlineSessionRef: React.RefObject<InlineComposerDraftSession | null>;
@@ -19,12 +21,12 @@ interface UseComposerAttachmentUploadsArgs {
 interface UseComposerAttachmentUploadsResult {
   bottomAttachmentError: string | null;
   setBottomAttachmentError: (error: string | null) => void;
-  handleAttachBottomFiles: (files: File[]) => Promise<void>;
+  handleAttachBottomFiles: (files: File[]) => Promise<PromptDraftAttachment[]>;
   isAttachingBottomFiles: boolean;
   bottomPendingUploads: readonly PendingAttachmentUpload[];
   inlineAttachmentError: string | null;
   setInlineAttachmentError: (error: string | null) => void;
-  handleAttachInlineFiles: (files: File[]) => Promise<void>;
+  handleAttachInlineFiles: (files: File[]) => Promise<PromptDraftAttachment[]>;
   isAttachingInlineFiles: boolean;
   inlinePendingUploads: readonly PendingAttachmentUpload[];
 }
@@ -39,18 +41,17 @@ interface UseDraftAttachmentUploadsArgs {
   target: DraftAttachmentUploadTarget | null;
 }
 
+interface DraftAttachmentFailure {
+  targetKey: string | null;
+  message: string | null;
+}
+
 interface UseDraftAttachmentUploadsResult {
   attachmentError: string | null;
   setAttachmentError: (error: string | null) => void;
-  handleAttachFiles: (files: File[]) => Promise<void>;
+  handleAttachFiles: (files: File[]) => Promise<PromptDraftAttachment[]>;
   isAttachingFiles: boolean;
   pendingUploads: readonly PendingAttachmentUpload[];
-}
-
-interface DraftAttachmentOperationState {
-  error: string | null;
-  pendingCount: number;
-  targetKey: string | null;
 }
 
 function uploadRejectionReason(error: unknown): string | null {
@@ -69,6 +70,48 @@ function attachFailureMessage(
     : `Failed to attach ${names}: ${reason}`;
 }
 
+export async function uploadDraftAttachments({
+  uploads,
+  target,
+  upload,
+  getCurrentTarget,
+  onUploadSettled,
+}: {
+  uploads: readonly PendingAttachmentUpload[];
+  target: DraftAttachmentUploadTarget;
+  upload: (file: File) => Promise<PromptDraftAttachment>;
+  getCurrentTarget: () => DraftAttachmentUploadTarget | null;
+  onUploadSettled: (upload: PendingAttachmentUpload) => void;
+}): Promise<{
+  added: PromptDraftAttachment[];
+  failureMessage: string | null;
+}> {
+  const added: PromptDraftAttachment[] = [];
+  const failedFiles: string[] = [];
+  let rejectionReason: string | null = null;
+  for (const pendingUpload of uploads) {
+    try {
+      const uploaded = await upload(pendingUpload.file);
+      target.addAttachment(uploaded);
+      if (getCurrentTarget()?.key === target.key) {
+        added.push(uploaded);
+      }
+    } catch (error) {
+      failedFiles.push(pendingUpload.file.name);
+      rejectionReason ??= uploadRejectionReason(error);
+    } finally {
+      onUploadSettled(pendingUpload);
+    }
+  }
+  return {
+    added,
+    failureMessage:
+      failedFiles.length > 0
+        ? attachFailureMessage(failedFiles, rejectionReason)
+        : null,
+  };
+}
+
 export function useDraftAttachmentUploads({
   projectId,
   target,
@@ -76,92 +119,59 @@ export function useDraftAttachmentUploads({
   const uploadPromptAttachment = useUploadPromptAttachment();
   const targetRef = useRef(target);
   targetRef.current = target;
-  const [operation, setOperation] = useState<DraftAttachmentOperationState>({
-    error: null,
-    pendingCount: 0,
+  const [failure, setFailure] = useState<DraftAttachmentFailure>({
     targetKey: null,
+    message: null,
   });
   const targetKey = target?.key ?? null;
-  const isCurrentOperation = operation.targetKey === targetKey;
-  const { pendingUploads, startUploads, finishUploads } = usePendingAttachmentUploads(
-    targetKey === null ? null : `${projectId}\0${targetKey}`,
-  );
+  const { pendingUploads, startUploads, finishUploads } =
+    usePendingAttachmentUploads(
+      targetKey === null ? null : `${projectId}\0${targetKey}`,
+    );
 
   const setAttachmentError = useCallback(
-    (error: string | null) => {
-      setOperation((current) => ({
-        error,
-        pendingCount:
-          current.targetKey === targetKey ? current.pendingCount : 0,
-        targetKey,
-      }));
-    },
+    (message: string | null) => setFailure({ targetKey, message }),
     [targetKey],
   );
   const handleAttachFiles = useCallback(
     async (files: File[]) => {
       const activeTarget = targetRef.current;
-      if (!activeTarget || files.length === 0) return;
-      const capturedTargetKey = activeTarget.key;
-      setOperation((current) => ({
-        error: null,
-        pendingCount:
-          current.targetKey === capturedTargetKey
-            ? current.pendingCount + 1
-            : 1,
-        targetKey: capturedTargetKey,
-      }));
-      const uploads = startUploads(files);
-      const failedFiles: string[] = [];
-      let rejectionReason: string | null = null;
-      try {
-        for (const upload of uploads) {
-          try {
-            const uploaded = await uploadPromptAttachment.mutateAsync({
-              projectId,
-              file: upload.file,
-            });
-            const currentTarget = targetRef.current;
-            if (currentTarget?.key === capturedTargetKey) {
-              currentTarget.addAttachment(uploaded);
-            }
-          } catch (error) {
-            failedFiles.push(upload.file.name);
-            rejectionReason ??= uploadRejectionReason(error);
-          } finally {
-            finishUploads([upload]);
-          }
-        }
-      } finally {
-        setOperation((current) =>
-          current.targetKey === capturedTargetKey
-            ? {
-                error:
-                  failedFiles.length > 0 &&
-                  targetRef.current?.key === capturedTargetKey
-                    ? attachFailureMessage(failedFiles, rejectionReason)
-                    : current.error,
-                pendingCount: Math.max(0, current.pendingCount - 1),
-                targetKey: capturedTargetKey,
-              }
-            : current,
-        );
+      if (!activeTarget || files.length === 0) return [];
+      setFailure({ targetKey: activeTarget.key, message: null });
+      const result = await uploadDraftAttachments({
+        uploads: startUploads(files),
+        target: activeTarget,
+        upload: (file) =>
+          uploadPromptAttachment.mutateAsync({ projectId, file }),
+        getCurrentTarget: () => targetRef.current,
+        onUploadSettled: (upload) => finishUploads([upload]),
+      });
+      if (
+        result.failureMessage !== null &&
+        targetRef.current?.key === activeTarget.key
+      ) {
+        setFailure({
+          targetKey: activeTarget.key,
+          message: result.failureMessage,
+        });
       }
+      return result.added;
     },
     [projectId, uploadPromptAttachment, startUploads, finishUploads],
   );
 
   return {
-    attachmentError: isCurrentOperation ? operation.error : null,
+    attachmentError: failure.targetKey === targetKey ? failure.message : null,
+    isAttachingFiles: pendingUploads.length > 0,
     setAttachmentError,
     handleAttachFiles,
-    isAttachingFiles: isCurrentOperation && operation.pendingCount > 0,
     pendingUploads,
   };
 }
 
 export function useComposerAttachmentUploads({
   projectId,
+  draftStorageKey,
   addDraftAttachment,
   inlineEditSessionId,
   inlineSessionRef,
@@ -174,8 +184,9 @@ export function useComposerAttachmentUploads({
     pendingUploads: bottomPendingUploads,
   } = useDraftAttachmentUploads({
     projectId,
-    target: { key: "bottom", addAttachment: addDraftAttachment },
+    target: { key: draftStorageKey, addAttachment: addDraftAttachment },
   });
+  const [inlineUploadScope] = useState(nanoid);
   const addInlineAttachment = useCallback(
     (uploaded: PromptDraftAttachment) => {
       const current = inlineSessionRef.current;
@@ -201,7 +212,7 @@ export function useComposerAttachmentUploads({
     target:
       inlineEditSessionId !== null
         ? {
-            key: String(inlineEditSessionId),
+            key: `${inlineUploadScope}:${inlineEditSessionId}`,
             addAttachment: addInlineAttachment,
           }
         : null,

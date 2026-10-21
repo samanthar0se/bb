@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import { afterEach, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { createRealtimeCacheEffects } from "./realtime-cache-effects";
@@ -62,6 +60,7 @@ it.each(["initial connect", "reconnect", "reload notification"])(
     const deps: PluginFrontendReconcileDeps = {
       fetchCandidates: () => fetchFrontendCandidates(queryClient),
       importModule: async () => ({ default: definePluginApp(() => {}) }),
+      importRetryDelaysMs: [],
       applyCss: () => {},
       retainCss: () => () => {},
       resetCrashedSlots: () => {},

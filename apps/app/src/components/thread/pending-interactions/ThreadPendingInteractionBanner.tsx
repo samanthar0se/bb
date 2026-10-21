@@ -1,7 +1,4 @@
-import {
-  PendingInteractionShell,
-  type PendingInteractionSourceThread,
-} from "./PendingInteractionShell";
+import { PendingInteractionShell } from "./PendingInteractionShell";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   assertNever,
@@ -10,7 +7,10 @@ import {
   formatPendingInteractionSubjectDetailLines,
   type PendingInteractionToolUseAsk,
 } from "@bb/core-ui";
-import { extractShellCommandFromString } from "@bb/thread-view";
+import {
+  extractShellCommandFromString,
+  formatShellCommandForDisplay,
+} from "@bb/thread-view";
 import {
   isPluginPendingInteraction,
   type ApprovalPendingInteractionPayload,
@@ -42,11 +42,17 @@ import { useAppNavigationHost } from "@/lib/app-navigation-host";
 import { normalizeExperimentalLiveFileTarget } from "@/lib/live-file-navigation";
 import { cn } from "@bb/shared-ui/lib/utils";
 
-interface ThreadPendingInteractionBannerProps {
+interface ThreadPendingInteractionBannersProps {
+  interactions: readonly PendingInteraction[];
+  hostId?: string;
+  threadId: string;
+}
+
+interface PendingInteractionBannerProps {
   hostId?: string;
   interaction: PendingInteraction;
-  sourceThread?: PendingInteractionSourceThread;
   threadId: string;
+  collapsedByDefault: boolean;
 }
 
 type ApprovalBannerSubject = Extract<
@@ -58,15 +64,15 @@ interface ApprovalPendingInteractionBannerProps {
   interaction: PendingInteraction;
   payload: ApprovalPendingInteractionPayload;
   subject: ApprovalBannerSubject;
-  sourceThread?: PendingInteractionSourceThread;
   threadId: string;
+  collapsedByDefault: boolean;
 }
 
 interface UserQuestionPendingInteractionBannerProps {
   interaction: PendingInteraction;
   questions: readonly PendingInteractionUserQuestionQuestion[];
-  sourceThread?: PendingInteractionSourceThread;
   threadId: string;
+  collapsedByDefault: boolean;
 }
 
 interface ApprovalSubject {
@@ -99,18 +105,28 @@ interface ApprovalDecisionSubmission {
   submitDisabled: boolean;
 }
 
-export function ThreadPendingInteractionBanner(
-  props: ThreadPendingInteractionBannerProps,
-) {
-  return <PendingInteractionBanner key={props.interaction.id} {...props} />;
+export function ThreadPendingInteractionBanners({
+  hostId,
+  interactions,
+  threadId,
+}: ThreadPendingInteractionBannersProps) {
+  return interactions.map((interaction, index) => (
+    <PendingInteractionBanner
+      key={interaction.id}
+      hostId={hostId}
+      interaction={interaction}
+      threadId={threadId}
+      collapsedByDefault={index > 0}
+    />
+  ));
 }
 
 function PendingInteractionBanner({
   hostId,
   interaction,
-  sourceThread,
   threadId,
-}: ThreadPendingInteractionBannerProps) {
+  collapsedByDefault,
+}: PendingInteractionBannerProps) {
   const request = classifyInteractionRequest(interaction);
   if (request.family === "approval") {
     return (
@@ -118,8 +134,8 @@ function PendingInteractionBanner({
         interaction={interaction}
         payload={request.payload}
         subject={request.subject}
-        sourceThread={sourceThread}
         threadId={threadId}
+        collapsedByDefault={collapsedByDefault}
       />
     );
   }
@@ -129,8 +145,8 @@ function PendingInteractionBanner({
         <ThreadUserQuestionPendingInteractionBanner
           interaction={interaction}
           questions={request.questions}
-          sourceThread={sourceThread}
           threadId={threadId}
+          collapsedByDefault={collapsedByDefault}
         />
       );
     case "plan_review":
@@ -139,8 +155,8 @@ function PendingInteractionBanner({
           hostId={hostId}
           interaction={interaction}
           request={request}
-          sourceThread={sourceThread}
           threadId={threadId}
+          collapsedByDefault={collapsedByDefault}
         />
       );
     default:
@@ -150,7 +166,7 @@ function PendingInteractionBanner({
           data-request-kind={request.kind}
         >
           <PluginPendingInteractionComposer
-            sourceThread={sourceThread}
+            collapsedByDefault={collapsedByDefault}
             interaction={interaction}
             request={{
               pluginId: request.pluginId,
@@ -171,8 +187,8 @@ interface PlanReviewRequestBannerProps {
   hostId?: string;
   interaction: PendingInteraction;
   request: Extract<InteractionRequestView, { kind: "plan_review" }>;
-  sourceThread?: PendingInteractionSourceThread;
   threadId: string;
+  collapsedByDefault: boolean;
 }
 
 function useApprovalDecisionSubmission({
@@ -215,8 +231,8 @@ function PlanReviewRequestBanner({
   hostId,
   interaction,
   request,
-  sourceThread,
   threadId,
+  collapsedByDefault,
 }: PlanReviewRequestBannerProps) {
   const { errorMessage, loadingDecision, submitDecision, submitDisabled } =
     useApprovalDecisionSubmission({
@@ -239,9 +255,8 @@ function PlanReviewRequestBanner({
     <PendingInteractionShell
       label="Plan review"
       title={approval.reason ?? "Ready to code?"}
-      initiallyExpanded={false}
+      expandedByDefault={!collapsedByDefault}
       errorMessage={errorMessage}
-      sourceThread={sourceThread}
       testId="plan-review-banner"
       footer={
         <ApprovalDecisionButtons
@@ -311,8 +326,8 @@ function ApprovalPendingInteractionBanner({
   interaction,
   payload,
   subject,
-  sourceThread,
   threadId,
+  collapsedByDefault,
 }: ApprovalPendingInteractionBannerProps) {
   const { errorMessage, loadingDecision, submitDecision, submitDisabled } =
     useApprovalDecisionSubmission({
@@ -329,9 +344,8 @@ function ApprovalPendingInteractionBanner({
     <PendingInteractionShell
       label="Approval needed"
       title={view.title}
-      initiallyExpanded={false}
+      expandedByDefault={!collapsedByDefault}
       errorMessage={errorMessage}
-      sourceThread={sourceThread}
       testId="approval-banner"
       footer={
         <ApprovalDecisionButtons
@@ -351,8 +365,8 @@ function ApprovalPendingInteractionBanner({
 function ThreadUserQuestionPendingInteractionBanner({
   interaction,
   questions,
-  sourceThread,
   threadId,
+  collapsedByDefault,
 }: UserQuestionPendingInteractionBannerProps) {
   const isResolving = interaction.status === "resolving";
 
@@ -361,8 +375,7 @@ function ThreadUserQuestionPendingInteractionBanner({
       label={
         questions.length === 1 ? "Question" : `${questions.length} questions`
       }
-      initiallyExpanded
-      sourceThread={sourceThread}
+      expandedByDefault={!collapsedByDefault}
       testId="user-question-banner"
     >
       {() => (
@@ -536,14 +549,15 @@ function CommandPreview({
   detailLines: readonly string[];
 }) {
   const [showsAllLines, setShowsAllLines] = useState(false);
-  const lines = command.split("\n");
+  const displayCommand = formatShellCommandForDisplay(command);
+  const lines = displayCommand.split("\n");
   const hiddenLineCount = Math.max(
     0,
     lines.length - COMMAND_PREVIEW_LINE_COUNT,
   );
   const visibleCommand =
     showsAllLines || hiddenLineCount === 0
-      ? command
+      ? displayCommand
       : lines.slice(0, COMMAND_PREVIEW_LINE_COUNT).join("\n");
   return (
     <div

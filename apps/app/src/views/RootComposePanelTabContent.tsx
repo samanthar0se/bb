@@ -14,6 +14,7 @@ import {
   LazyNewTabPage,
   LazyProjectFilePreviewTabContent,
   LazyThreadStorageFilePreviewTabContent,
+  LazyAttachmentFilePreviewTabContent,
   LazyThreadTerminalPanel,
   LazyWorkspaceFilePreviewTabContent,
 } from "@/components/secondary-panel/lazySecondaryPanelComponents";
@@ -56,8 +57,10 @@ interface RootComposePanelTabContentProps {
   onActivateTab: (tabId: string) => void;
   onAutoFocusNewTabHandled: () => void;
   onAutoFocusTerminalHandled: () => void;
-  onOpenBrowser: () => void;
+  onCloseTerminal: (terminalId: string) => void;
+  onOpenBrowser: (() => void) | null;
   onOpenPanelLink: MarkdownPreviewLinkHandler;
+  onRetryTerminalStart: (terminalId: string) => void;
   onSelectFileSearchResult: (selection: FileSearchSelection) => void;
   onSelectionAddToChat: (text: string) => void;
   onStartTerminal: () => void;
@@ -70,7 +73,7 @@ interface RootComposePanelTabContentProps {
   rootPanelThreadId: string | null;
   rootProjectHostId: string | null;
   shouldAutoFocusNewTab: boolean;
-  shouldAutoFocusTerminal: boolean;
+  autoFocusTerminalId: string | null;
   tab: SecondaryFileFixedPanelTab;
   terminalTarget: RootComposeTerminalTarget | null;
 }
@@ -141,8 +144,10 @@ export function RootComposePanelTabContent({
   onActivateTab,
   onAutoFocusNewTabHandled,
   onAutoFocusTerminalHandled,
+  onCloseTerminal,
   onOpenBrowser,
   onOpenPanelLink,
+  onRetryTerminalStart,
   onSelectFileSearchResult,
   onSelectionAddToChat,
   onStartTerminal,
@@ -155,27 +160,38 @@ export function RootComposePanelTabContent({
   rootPanelThreadId,
   rootProjectHostId,
   shouldAutoFocusNewTab,
-  shouldAutoFocusTerminal,
+  autoFocusTerminalId,
   tab,
   terminalTarget,
 }: RootComposePanelTabContentProps) {
   switch (tab.kind) {
     case "browser":
       return null;
+    case "attachment-file-preview":
+      return (
+        <LazyAttachmentFilePreviewTabContent
+          isPanelOpen={isPanelOpen}
+          name={tab.name}
+          onSelectionAddToChat={onSelectionAddToChat}
+          path={tab.path}
+          projectId={tab.projectId}
+        />
+      );
     case "terminal":
       return terminalTarget === null ? null : (
         <LazyThreadTerminalPanel
           autoFocus={
-            pane.isFocused && tab.id === activeTabId && shouldAutoFocusTerminal
+            pane.isFocused &&
+            tab.id === activeTabId &&
+            tab.terminalId === autoFocusTerminalId
           }
-          canCreateTerminal={canCreateTerminal}
           isPanelOpen={isPanelOpen}
           isPanelPersistedOpen={isPanelPersistedOpen}
           onAutoFocusHandled={onAutoFocusTerminalHandled}
+          onCloseStart={() => onCloseTerminal(tab.terminalId)}
           onOpenLink={onOpenPanelLink}
+          onRetryStart={() => onRetryTerminalStart(tab.terminalId)}
           onSelectionAddToChat={onSelectionAddToChat}
-          panelStateId={ROOT_COMPOSE_FIXED_PANEL_STATE_ID}
-          syncThreadId={null}
           target={terminalTarget}
           terminalId={tab.terminalId}
         />
@@ -197,12 +213,12 @@ export function RootComposePanelTabContent({
           }}
           recentItemsThreadId={ROOT_COMPOSE_FIXED_PANEL_STATE_ID}
           onOpenBrowser={
-            rootPanelThreadId
-              ? () => {
+            onOpenBrowser === null
+              ? undefined
+              : () => {
                   onActivateTab(tab.id);
                   onOpenBrowser();
                 }
-              : undefined
           }
           onStartTerminal={
             canCreateTerminal

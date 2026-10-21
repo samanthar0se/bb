@@ -7,7 +7,13 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   act,
   cleanup,
@@ -15,7 +21,6 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { createStore } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PERSONAL_PROJECT_ID } from "@bb/domain";
 import type {
@@ -32,15 +37,11 @@ import {
   setPluginSlotRegistrations,
   type PluginNavPanelSlot,
 } from "@/lib/plugin-slots";
-import {
-  AUTOMATIONS_PLUGIN_ID,
-  PLUGIN_PANEL_ROUTE_PATH,
-} from "@/lib/route-paths";
+import { PLUGIN_PANEL_ROUTE_PATH } from "@/lib/route-paths";
 import {
   markPluginFrontendsSettled,
   resetPluginFrontendBootStateForTest,
 } from "@/lib/plugin-frontend-boot-state";
-import { writeLastKnownPluginNavPanelChrome } from "@/lib/plugin-nav-panel-chrome";
 import { PluginPanelView } from "@/views/PluginPanelView";
 import {
   PluginPanelHeaderActions,
@@ -65,8 +66,6 @@ import {
 } from "./plugin-composer-host";
 import { PluginHomepageSections } from "./PluginHomepageSections";
 import { makePluginRegistrationSet as registrationSet } from "@/test/fixtures/plugins";
-import { registerNavigationPlugin } from "@/test/fixtures/navigation-plugin";
-import { renderNavigationHarness } from "@/test/navigation-harness";
 import {
   getComposerInputLock,
   useComposer,
@@ -85,12 +84,12 @@ import {
   usePluginPanelActions,
   type OpenPluginPanelArgs,
 } from "./PluginPanelActions";
-import { NewTabActions } from "@/components/secondary-panel/NewTabActions";
+import {
+  NewTabActions,
+  useNewTabActions,
+} from "@/components/secondary-panel/NewTabActions";
 import { buildFileOpenerPanelTab } from "./file-opener-tabs";
-import { splitLayoutAtom } from "@/lib/split-layout/atoms";
 import type { PromptDraftState } from "@bb/client-core";
-
-const AUTOMATIONS_PLUGIN_PANEL_PATH = "automations";
 
 function composerTextEffectValues(storageKey: string | null) {
   return getComposerTextEffects(storageKey).map(({ effect }) => effect);
@@ -536,6 +535,65 @@ describe("useComposer", () => {
     fireEvent.click(screen.getByText("quiet-update"));
     expect(draft.getCurrent().text).toBe("abcde!");
     expect(screen.getByTestId("reading-text").textContent).toBe("abcde!");
+  });
+
+  it("mounts a plugin that reads the text during a navigation without re-rendering the rest of the page", () => {
+    const pageRenders = vi.fn();
+    function ReadingProbe() {
+      const composer = useComposer();
+      return <div data-testid="navigated-text">{composer.text}</div>;
+    }
+    function PageContent() {
+      pageRenders();
+      return null;
+    }
+    setPluginSlotRegistrations(
+      "demo",
+      registrationSet({
+        composerCustomizations: [
+          {
+            id: "probe",
+            actions: [{ id: "reading", component: ReadingProbe }],
+          },
+        ],
+      }),
+    );
+    const staticView: ComposerView = {
+      scope: { kind: "thread", threadId: "thr_navigated" },
+      layout: "expanded",
+      experimental_selectedProviderId: null,
+      draft: { text: "", isEmpty: true, attachmentCount: 0 },
+      run: { isRunning: false, isSubmitting: false },
+    };
+    getPromptDraftAccessor({
+      kind: "thread",
+      projectId: PERSONAL_PROJECT_ID,
+      threadId: "thr_navigated",
+    }).setDraft({ text: "saved draft", mentions: [], attachments: [] });
+    function Page({ isOpen }: { isOpen: boolean }) {
+      return (
+        <MemoryRouter initialEntries={["/threads/thr_navigated"]}>
+          {isOpen ? (
+            <>
+              <PageContent />
+              <ComposerActionsSlot view={staticView} />
+            </>
+          ) : null}
+        </MemoryRouter>
+      );
+    }
+    const { rerender } = render(<Page isOpen={false} />);
+
+    act(() => {
+      startTransition(() => {
+        rerender(<Page isOpen />);
+      });
+    });
+
+    expect(screen.getByTestId("navigated-text").textContent).toBe(
+      "saved draft",
+    );
+    expect(pageRenders).toHaveBeenCalledTimes(1);
   });
 
   it("keeps following the draft once a plugin starts reading it after mount", () => {
@@ -1700,9 +1758,7 @@ describe("useComposer().experimental_setSelection", () => {
     });
 
     await expect(
-      captured!.experimental_setSelection({
-        reasoningLevel: "extreme" as never,
-      }),
+      captured!.experimental_setSelection({ reasoningLevel: "" }),
     ).rejects.toThrow(/reasoning level/);
     await expect(
       captured!.experimental_setSelection({ permissionMode: "yolo" as never }),
@@ -1739,67 +1795,10 @@ describe("useComposer().experimental_setSelection", () => {
   });
 });
 
-describe("Navigation plugin + PluginPanelView", () => {
+describe("PluginPanelView routes", () => {
   function Board() {
     return <div>board panel body</div>;
   }
-
-  function registerAutomationsPanel() {
-    setPluginSlotRegistrations(
-      AUTOMATIONS_PLUGIN_ID,
-      registrationSet({
-        navPanels: [
-          {
-            id: AUTOMATIONS_PLUGIN_PANEL_PATH,
-            title: "Automations",
-            icon: "Calendar",
-            path: AUTOMATIONS_PLUGIN_PANEL_PATH,
-            component: Board,
-          },
-        ],
-      }),
-    );
-  }
-
-  it("keeps the Automations row in the nav list", async () => {
-    await registerNavigationPlugin();
-    registerAutomationsPanel();
-
-    renderNavigationHarness();
-
-    expect(screen.getByRole("button", { name: "Automations" })).toBeDefined();
-  });
-
-  it("renders a sidebar entry that routes to the plugin panel", async () => {
-    await registerNavigationPlugin();
-    setPluginSlotRegistrations(
-      "demo",
-      registrationSet({
-        navPanels: [
-          {
-            id: "board",
-            title: "Demo board",
-            icon: "columns",
-            path: "board",
-            component: Board,
-          },
-        ],
-      }),
-    );
-    renderNavigationHarness({
-      children: (
-        <Routes>
-          <Route path="/" element={<div>home</div>} />
-          <Route
-            path={PLUGIN_PANEL_ROUTE_PATH}
-            element={<RoutedPluginPanelView />}
-          />
-        </Routes>
-      ),
-    });
-    fireEvent.click(screen.getByText("Demo board"));
-    expect(screen.getByText("board panel body")).toBeDefined();
-  });
 
   it("releases the plugin stylesheet when navigation unmounts the panel route", async () => {
     vi.useFakeTimers();
@@ -1858,146 +1857,6 @@ describe("Navigation plugin + PluginPanelView", () => {
     expect(
       document.head.querySelector('link[data-bb-plugin-css="demo"]'),
     ).toBeNull();
-  });
-
-  it("shows a plugin panel's position when it is open in a split", async () => {
-    await registerNavigationPlugin();
-    setPluginSlotRegistrations(
-      "demo",
-      registrationSet({
-        navPanels: [
-          {
-            id: "board",
-            title: "Demo board",
-            icon: "columns",
-            path: "board",
-            component: Board,
-          },
-        ],
-      }),
-    );
-    const store = createStore();
-    store.set(splitLayoutAtom, {
-      focusedPaneId: "pane-thread",
-      root: {
-        type: "split",
-        dir: "row",
-        sizes: [0.5, 0.5],
-        children: [
-          {
-            type: "pane",
-            paneId: "pane-plugin",
-            content: {
-              kind: "plugin-panel",
-              pluginId: "demo",
-              panelPath: "board",
-              subPath: "card/1",
-            },
-          },
-          {
-            type: "pane",
-            paneId: "pane-thread",
-            content: {
-              kind: "thread",
-              projectId: "proj_test",
-              threadId: "thr_test",
-            },
-          },
-        ],
-      },
-    });
-
-    renderNavigationHarness({ store, splitEnabled: true });
-
-    const splitMap = screen.getByRole("img", {
-      name: "Demo board — open in split",
-    });
-    const label = screen.getByText("Demo board");
-    expect(label.nextElementSibling).toBe(splitMap);
-  });
-
-  it("keeps the sidebar entry active on nested plugin panel routes", async () => {
-    await registerNavigationPlugin();
-    setPluginSlotRegistrations(
-      "simple-notes",
-      registrationSet({
-        navPanels: [
-          {
-            id: "simple-notes",
-            title: "Simple notes",
-            icon: "note",
-            path: "simple-notes",
-            component: Board,
-          },
-        ],
-      }),
-    );
-    renderNavigationHarness({
-      initialEntries: [
-        "/plugins/simple-notes/simple-notes/bb-plugin-marketplaces-and-compatible-updates.md",
-      ],
-    });
-
-    expect(
-      screen
-        .getByRole("button", { name: "Simple notes" })
-        .getAttribute("aria-current"),
-    ).toBe("page");
-  });
-
-  it("draws a remembered plugin row before boot and keeps the same node when the plugin registers", async () => {
-    await registerNavigationPlugin();
-    resetPluginFrontendBootStateForTest();
-    writeLastKnownPluginNavPanelChrome([
-      {
-        pluginId: "demo",
-        id: "board",
-        path: "board",
-        title: "Demo board",
-        icon: "columns",
-      },
-    ]);
-    renderNavigationHarness();
-    const rememberedRow = screen.getByRole("button", { name: "Demo board" });
-
-    act(() => {
-      setPluginSlotRegistrations(
-        "demo",
-        registrationSet({
-          navPanels: [
-            {
-              id: "board",
-              title: "Demo board",
-              icon: "columns",
-              path: "board",
-              component: Board,
-            },
-          ],
-        }),
-      );
-      markPluginFrontendsSettled();
-    });
-    expect(screen.getByRole("button", { name: "Demo board" })).toBe(
-      rememberedRow,
-    );
-  });
-
-  it("drops a remembered plugin row that never registers once frontends have settled", async () => {
-    await registerNavigationPlugin();
-    resetPluginFrontendBootStateForTest();
-    writeLastKnownPluginNavPanelChrome([
-      {
-        pluginId: "ghost",
-        id: "board",
-        path: "board",
-        title: "Ghost board",
-        icon: "columns",
-      },
-    ]);
-    renderNavigationHarness();
-    expect(screen.getByRole("button", { name: "Ghost board" })).toBeDefined();
-    act(() => markPluginFrontendsSettled());
-    expect(screen.queryByRole("button", { name: "Ghost board" })).toBeNull();
   });
 
   it("stays quiet for an unknown panel until plugin frontends have booted", () => {
@@ -2375,12 +2234,13 @@ describe("plugin thread panel actions", () => {
         openPluginPanel: (args) => setTab(createPluginPanelFixedPanelTab(args)),
         projectId: "proj_1",
       });
+      const actions = useNewTabActions({
+        onStartTerminal: () => undefined,
+        pluginActions: entries,
+      });
       return (
         <>
-          <NewTabActions
-            onStartTerminal={() => undefined}
-            pluginActions={entries}
-          />
+          <NewTabActions actions={actions} />
           {tab ? (
             <PluginPanelTabContent
               tab={tab}
@@ -2406,7 +2266,7 @@ describe("plugin thread panel actions", () => {
     expect(screen.queryByText("Set up thread")).toBeNull();
   });
 
-  it("degrades to a placeholder when the tab's action is gone", () => {
+  it("degrades to a placeholder once plugins settle without the tab's action", () => {
     const tab = createPluginPanelFixedPanelTab({
       actionId: "issue",
       paramsJson: null,
@@ -2419,6 +2279,10 @@ describe("plugin thread panel actions", () => {
         context={{ kind: "thread", threadId: "thr_9" }}
       />,
     );
+    expect(screen.queryByText(/This plugin tab is not available/)).toBeNull();
+
+    act(() => markPluginFrontendsSettled());
+
     expect(screen.getByText(/This plugin tab is not available/)).toBeDefined();
   });
 

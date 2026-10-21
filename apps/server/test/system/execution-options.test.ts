@@ -147,7 +147,8 @@ describe("appendCustomModels", () => {
       codexModels[0].supportedReasoningEfforts.map(
         (effort) => effort.reasoningEffort,
       ),
-    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    ).toEqual(["none", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(codexModels[0].defaultReasoningEffort).toBe("medium");
 
     const { models: piModels } = appendCustomModels(registry, {
       customModels: [{ providerId: "pi", model: "custom-model" }],
@@ -1282,6 +1283,7 @@ function registerHeldModelListResponder(
     close() {},
     send(data: string) {
       const message = hostDaemonServerWsMessageSchema.parse(JSON.parse(data));
+      if (message.type === "provider-session-policy.replace") return;
       if (message.type !== "host-rpc.request") {
         throw new Error(`Unexpected daemon websocket message ${message.type}`);
       }
