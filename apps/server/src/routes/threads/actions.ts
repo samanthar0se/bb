@@ -33,6 +33,7 @@ import {
 } from "../../services/plugins/plugin-thread-events.js";
 import { toThreadQueuedMessage } from "../../services/threads/thread-queued-messages.js";
 import { retryFailedTurn } from "../../services/threads/turn-retry.js";
+import { regenerateThreadTitle } from "../../services/threads/title-generation.js";
 import {
   requireConnectedHostSession,
   requirePublicThread,
@@ -528,6 +529,13 @@ export function registerThreadActionRoutes(app: Hono, deps: AppDeps): void {
     if (!thread) {
       throw new ApiError(404, "thread_not_found", "Thread not found");
     }
+    return context.json(toThreadResponseFromThread(deps, { thread }));
+  });
+
+  post(routes.regenerateTitle, async (context) => {
+    const thread = await regenerateThreadTitle(deps, {
+      thread: requirePublicThread(deps.db, context.req.param("id")),
+    });
     return context.json(toThreadResponseFromThread(deps, { thread }));
   });
 

@@ -1,4 +1,4 @@
-import { CORE_TAG_SCOPE, invalidateTags, pluginTagScope } from "@bb/query-tags";
+import { invalidateTags, pluginTagScope } from "@bb/query-tags";
 import type { QueryClient } from "@tanstack/react-query";
 import { assertNever } from "@bb/core-ui";
 import {
@@ -12,10 +12,7 @@ import {
   type ThreadChangeMetadata,
   type ThreadChangeKind,
 } from "@bb/domain";
-import {
-  environmentPullRequestTag,
-  type RealtimeSubscriptionTarget,
-} from "@bb/server-contract";
+import type { RealtimeSubscriptionTarget } from "@bb/server-contract";
 import {
   invalidateRealtimeQueriesAfterServerReconnect,
   invalidateRealtimeQueriesFetchedBeforeInitialConnect,
@@ -71,7 +68,6 @@ const ENVIRONMENT_INVALIDATION_DEBOUNCE_MS = 250;
 const ENVIRONMENT_INVALIDATION_MAX_WAIT_MS = 500;
 const WATCHED_ENVIRONMENT_CHANGE_KINDS: EnvironmentChangeKind[] = [
   "work-status-changed",
-  "git-refs-changed",
   "thread-storage-changed",
 ];
 
@@ -471,6 +467,15 @@ export function createRealtimeCacheEffects({
       });
     }
   };
+  const applyOrDeferSystemChanges = (
+    changeKinds: readonly SystemChangeKind[],
+  ): void => {
+    if (!visibility.isDocumentVisible()) {
+      addAll(deferredNonThreadChanges.systemKinds, changeKinds);
+      return;
+    }
+    applySystemChanges(changeKinds);
+  };
 
   const deferredTags = new Map<string, Set<string> | null>();
   const applyTags = (scope: string, tags: readonly string[] | null): void => {
@@ -507,10 +512,8 @@ export function createRealtimeCacheEffects({
         }
         return;
       }
-      case "environment-pull-request":
-        applyTags(CORE_TAG_SCOPE, [
-          environmentPullRequestTag(target.environmentId),
-        ]);
+      case "plugin-read":
+        applyTags(pluginTagScope(target.pluginId), null);
         return;
       case "thread-timeline":
       case "thread-list":
@@ -644,15 +647,8 @@ export function createRealtimeCacheEffects({
         case "plugin":
           applyTags(pluginTagScope(message.pluginId), message.tags);
           break;
-        case "tags":
-          applyTags(CORE_TAG_SCOPE, message.tags);
-          break;
         case "system":
-          if (!documentVisible) {
-            addAll(deferredNonThreadChanges.systemKinds, message.changes);
-            break;
-          }
-          applySystemChanges(message.changes);
+          applyOrDeferSystemChanges(message.changes);
           break;
         default:
           assertNever(message);
@@ -670,7 +666,7 @@ export function createRealtimeCacheEffects({
         for (const pluginId of pluginIds)
           if (typeof pluginId === "string")
             applyTags(pluginTagScope(pluginId), null);
-        applyTags(CORE_TAG_SCOPE, null);
+        applyOrDeferSystemChanges(["ui-preferences-changed"]);
         invalidateRealtimeQueriesAfterServerReconnect({
           disconnectedAt: event.disconnectedAt,
           queryClient,

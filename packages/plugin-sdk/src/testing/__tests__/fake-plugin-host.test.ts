@@ -103,6 +103,36 @@ describe("server", () => {
     );
     expect(unset.bb.server.experimental_appUrl).toBeNull();
   });
+
+  it("records tunnel ingress handles, shares an audience, and closes them on dispose", async () => {
+    const { bb, harness } = createFakePluginHost();
+    const first = await bb.server.internal_DO_NOT_USE_openTunnelIngress({
+      audience: "server:srv_1",
+    });
+    const shared = await bb.server.internal_DO_NOT_USE_openTunnelIngress({
+      audience: "server:srv_1",
+    });
+    const other = await bb.server.internal_DO_NOT_USE_openTunnelIngress({
+      audience: "server:srv_2",
+    });
+    expect(shared.baseUrl).toBe(first.baseUrl);
+    expect(other.baseUrl).not.toBe(first.baseUrl);
+    await expect(
+      bb.server.internal_DO_NOT_USE_openTunnelIngress({ audience: "" }),
+    ).rejects.toThrow(/non-empty audience/);
+
+    await first.close();
+    expect(
+      harness.internal_DO_NOT_USE_tunnelIngresses.map((entry) => entry.closed),
+    ).toEqual([true, false, false]);
+
+    await harness.dispose();
+    expect(
+      harness.internal_DO_NOT_USE_tunnelIngresses.every(
+        (entry) => entry.closed,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("ui.requestInput", () => {
@@ -410,6 +440,71 @@ describe("settings", () => {
     );
   });
 
+  it("rejects inherited object keys as unknown settings, like the production host", async () => {
+    const { bb, harness } = createFakePluginHost();
+    const handle = defineSettings(bb);
+    const changes: unknown[] = [];
+    handle.onChange((next) => changes.push(next));
+
+    for (const name of [
+      "constructor",
+      "toString",
+      "hasOwnProperty",
+      "valueOf",
+    ]) {
+      await expect(harness.setSettings({ [name]: "x" })).rejects.toThrow(
+        `unknown setting "${name}"`,
+      );
+      await expect(harness.setSettings({ [name]: null })).rejects.toThrow(
+        `unknown setting "${name}"`,
+      );
+    }
+    await expect(
+      harness.setSettings(JSON.parse('{"__proto__": "x"}')),
+    ).rejects.toThrow('unknown setting "__proto__"');
+    await expect(
+      handle.experimental_set(JSON.parse('{"constructor": "x"}')),
+    ).rejects.toThrow('unknown setting "constructor"');
+    expect(changes).toEqual([]);
+    expect(await handle.get()).toEqual({
+      token: undefined,
+      mode: "fast",
+      enabled: true,
+      retries: 3,
+    });
+  });
+
+  it("lets a plugin define settings named like inherited members and refuses __proto__", async () => {
+    const { bb, harness } = createFakePluginHost();
+    const handle = bb.settings.define({
+      constructor: {
+        type: "string" as const,
+        label: "Constructor",
+        default: "c",
+      },
+      toString: { type: "boolean" as const, label: "To string" },
+    });
+    expect(await handle.get()).toMatchObject({ constructor: "c" });
+    await harness.setSettings({ constructor: "d", toString: true });
+    expect(await handle.get()).toMatchObject({
+      constructor: "d",
+      toString: true,
+    });
+    await expect(harness.setSettings({ valueOf: "x" })).rejects.toThrow(
+      'unknown setting "valueOf"',
+    );
+    expect(() =>
+      bb.settings.define(
+        JSON.parse('{"__proto__": {"type": "string", "label": "Proto"}}'),
+      ),
+    ).toThrow('setting key "__proto__" is reserved');
+    expect(() =>
+      bb.settings.define({
+        constructor: { type: "string" as const, label: "Again" },
+      }),
+    ).toThrow('setting "constructor" is already defined');
+  });
+
   it("validates strings and lets plugin server code persist its own settings", async () => {
     const { bb, harness } = createFakePluginHost();
     const handle = bb.settings.define({
@@ -625,14 +720,10 @@ describe("rpc", () => {
     });
   });
 
-  it("preserves typed refusals and does not invalidate refused writes", async () => {
+  it("preserves typed refusals", async () => {
     const { bb, harness } = createFakePluginHost();
     const contract = defineRpcContract({
-      save: {
-        input: z.null(),
-        output: z.null(),
-        invalidates: () => ["private"],
-      },
+      save: { input: z.null(), output: z.null() },
     });
     bb.rpc.register(contract, {
       save: () => {
@@ -648,7 +739,6 @@ describe("rpc", () => {
       message: "Private",
       issues: [{ message: "Caller denied" }],
     });
-    expect(harness.experimental_rpcInvalidations).toEqual([]);
   });
 
   it("rejects invalid and duplicate registrations", () => {

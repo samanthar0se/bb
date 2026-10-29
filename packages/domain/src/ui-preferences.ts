@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GIT_PLUGIN_ID } from "./plugin-id.js";
 
 const UI_PREFERENCE_STRING_MAX_LENGTH = 1_024;
 const UI_PREFERENCE_LIST_MAX_LENGTH = 10_000;
@@ -48,6 +49,7 @@ export const UI_PREFERENCE_KEYS = [
   "sidebar.visiblePluginPanels",
   "sidebar.navigationProvider",
   "sidebar.threadListProvider",
+  "composer.provider",
   "infoPanel.collapsedSections",
 ] as const;
 export type UiPreferenceKey = (typeof UI_PREFERENCE_KEYS)[number];
@@ -148,10 +150,25 @@ export const uiPreferenceDefinitions = {
     "__automatic__",
     "Plugin that renders the sidebar thread list, or __automatic__ for the first installed thread list plugin other than the bundled thread-list/thread-list, falling back to it. Legacy __builtin__ resolves to thread-list/thread-list.",
   ),
+  "composer.provider": defineUiPreference(
+    uiPreferenceStringSchema,
+    "__automatic__",
+    "Plugin that draws the composer's input box: a plugin key such as bb--composer/composer, or __automatic__ for the first composer from a plugin you installed, then the bundled Composer plugin. With no composer plugin enabled, no composer is shown.",
+  ),
   "infoPanel.collapsedSections": defineUiPreference(
-    uiPreferenceStringListSchema,
+    uiPreferenceStringListSchema.transform((ids) => [
+      ...new Set(
+        ids.map((id) =>
+          id === "commits"
+            ? `${GIT_PLUGIN_ID}/commits`
+            : id === "uncommittedChanges"
+              ? `${GIT_PLUGIN_ID}/uncommitted-changes`
+              : id,
+        ),
+      ),
+    ]),
     [],
-    "Thread Info panel section ids that are collapsed, such as commits, uncommittedChanges, forks, or threadStorage.",
+    "Thread Info panel section ids that are collapsed, such as forks, threadStorage, or <pluginId>/<sectionId> for plugin sections like bb--git/commits and bb--git/uncommitted-changes. Legacy commits and uncommittedChanges resolve to the Git plugin's sections.",
   ),
 } as const satisfies Record<UiPreferenceKey, UiPreferenceDefinition>;
 

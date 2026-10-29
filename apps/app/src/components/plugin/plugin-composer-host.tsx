@@ -12,9 +12,7 @@ import {
 } from "react";
 import type {
   ComposerSelection,
-  ComposerSubmitOptions,
   ComposerView,
-  JsonValue,
   PluginComposerScope,
 } from "@get-bb/plugin-sdk";
 import { isComposerDraftEmpty } from "@get-bb/plugin-sdk/internal/composer-view";
@@ -31,10 +29,7 @@ export interface PluginComposerHost {
   setDraft(next: PromptDraftState): void;
   isAvailable?(): boolean;
   focus(): void;
-  submit?(
-    options: ComposerSubmitOptions,
-    pluginSubmission: { pluginId: string; data: JsonValue } | undefined,
-  ): Promise<void>;
+  sendsOnEnter?: boolean;
   setSelection?(selection: ComposerSelection): Promise<ComposerSelection>;
   getPluginMetadata?(pluginId: string): JsonObject;
   setPluginMetadata?(pluginId: string, metadata: JsonObject): void;
