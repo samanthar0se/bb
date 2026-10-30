@@ -603,6 +603,41 @@ describe("bb thread spawn command output", () => {
     },
   );
 
+  it.each([
+    ["alone", []],
+    ["with --origin-kind", ["--origin-kind", "fork"]],
+    ["with --source-thread", ["--source-thread", "source-1"]],
+  ])(
+    "rejects explicit null plugin metadata %s before making a request",
+    async (_case, flags) => {
+      const post = vi.fn();
+      const stderrWrite = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      stubServerApi({ "v1.threads.$post": post });
+      await expect(
+        runCommand(
+          [
+            "thread",
+            "spawn",
+            "--project",
+            "proj-1",
+            "--prompt",
+            "hello",
+            "--plugin-metadata-by-plugin",
+            "null",
+            ...flags,
+          ],
+          register,
+        ),
+      ).rejects.toThrow("process.exit:1");
+      expect(stderrWrite).toHaveBeenCalledWith(
+        expect.stringContaining("must be a JSON object keyed by plugin id"),
+      );
+      expect(post).not.toHaveBeenCalled();
+    },
+  );
+
   it("bb thread spawn reports invalid permission mode choices", async () => {
     vi.stubEnv("BB_PROJECT_ID", "proj-1");
 

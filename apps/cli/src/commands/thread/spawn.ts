@@ -601,21 +601,22 @@ export function registerSpawnCommand(
           string,
           import("@bb/domain").JsonObject
         > | null = null;
-        if (parsedPluginMetadata !== null) {
+        if (opts.pluginMetadataByPlugin !== undefined) {
+          if (
+            parsedPluginMetadata === null ||
+            typeof parsedPluginMetadata !== "object" ||
+            Array.isArray(parsedPluginMetadata)
+          ) {
+            throw new Error(
+              "--plugin-metadata-by-plugin must be a JSON object keyed by plugin id.",
+            );
+          }
           if (
             opts.originKind !== undefined ||
             opts.sourceThread !== undefined
           ) {
             throw new Error(
               "--plugin-metadata-by-plugin cannot be combined with --origin-kind or --source-thread.",
-            );
-          }
-          if (
-            typeof parsedPluginMetadata !== "object" ||
-            Array.isArray(parsedPluginMetadata)
-          ) {
-            throw new Error(
-              "--plugin-metadata-by-plugin must be a JSON object keyed by plugin id.",
             );
           }
           pluginMetadataByPlugin = Object.fromEntries(

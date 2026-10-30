@@ -88,30 +88,54 @@ export function setPluginDraftMetadata(
   else next[pluginId] = clone(validated);
   write(draftStorageKey, next);
 }
+function scopeMetadataMap(
+  map: MetadataMap,
+  pluginId: string | undefined,
+): MetadataMap {
+  if (pluginId === undefined) return map;
+  const metadata = map[pluginId];
+  return metadata === undefined ? {} : { [pluginId]: metadata };
+}
+function withoutScope(
+  map: MetadataMap,
+  pluginId: string | undefined,
+): MetadataMap {
+  if (pluginId === undefined) return {};
+  const { [pluginId]: _removed, ...rest } = map;
+  return rest;
+}
 export function getAllPluginDraftMetadata(
   draftStorageKey: string,
+  pluginId?: string,
 ): MetadataMap {
-  return clone(read(draftStorageKey));
+  return clone(scopeMetadataMap(read(draftStorageKey), pluginId));
 }
 export function clearPluginDraftMetadataIfCurrentMatches(
   draftStorageKey: string,
   snapshot: MetadataMap,
+  pluginId?: string,
 ): boolean {
   const current = read(draftStorageKey);
-  if (JSON.stringify(current) !== JSON.stringify(snapshot)) return false;
-  write(draftStorageKey, {});
+  if (
+    JSON.stringify(scopeMetadataMap(current, pluginId)) !==
+    JSON.stringify(snapshot)
+  )
+    return false;
+  write(draftStorageKey, withoutScope(current, pluginId));
   return true;
 }
 export function restorePluginDraftMetadataIfEmpty(
   draftStorageKey: string,
   snapshot: MetadataMap,
+  pluginId?: string,
 ): boolean {
+  const current = read(draftStorageKey);
   if (
-    Object.keys(read(draftStorageKey)).length > 0 ||
+    Object.keys(scopeMetadataMap(current, pluginId)).length > 0 ||
     Object.keys(snapshot).length === 0
   )
     return false;
-  write(draftStorageKey, clone(snapshot));
+  write(draftStorageKey, { ...current, ...clone(snapshot) });
   return true;
 }
 export function subscribePluginDraftMetadata(

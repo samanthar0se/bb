@@ -284,7 +284,9 @@ className?, draftKey? }` — the `default*` props are SEEDS, not controlled
   `{ projectId, providerId, model, reasoningLevel, permissionMode,
 serviceTier?, sessionOptions?, executionInputSources, environment, input }`
   (`sessionOptions` only when the user changed an agent option the provider
-  declares). Hand it to
+  declares; `pluginMetadata` only when your plugin set its own draft metadata
+  through `useComposer().experimental_setPluginMetadata`. Other plugins'
+  draft metadata stays in the draft and is never delivered to you). Hand it to
   `useSdk().threads.spawn` from the frontend (or forward it verbatim to your
   backend rpc and `bb.sdk.threads.spawn` when the create needs server-side
   work), adding `sectionId` / `parentThreadId` / `title` / `visibility`

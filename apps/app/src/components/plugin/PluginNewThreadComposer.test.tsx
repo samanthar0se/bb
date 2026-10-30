@@ -45,6 +45,7 @@ import {
 import { encodeReuseValue } from "@/components/pickers/environment-picker-value";
 import { useRootComposeReuseEnvironment } from "@/lib/root-compose-selection";
 import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
+import { PluginContext } from "@/components/plugin/plugin-context";
 import {
   getAllPluginDraftMetadata,
   getPluginDraftMetadata,
@@ -535,21 +536,24 @@ function composerElement(
   seed: NewThreadRequest,
   onSubmit: (request: NewThreadRequest) => void,
   draftKey: string,
+  hostPluginId: string | null = null,
 ) {
   return (
     <MemoryRouter>
-      <PluginNewThreadComposer
-        draftKey={draftKey}
-        defaultProjectId={seed.projectId}
-        defaultProviderId={seed.providerId}
-        defaultModel={seed.model}
-        defaultReasoningLevel={seed.reasoningLevel}
-        defaultServiceTier={seed.serviceTier}
-        defaultPermissionMode={seed.permissionMode}
-        defaultEnvironment={seed.environment}
-        initialPrompt="review every PR for slop"
-        onSubmit={onSubmit}
-      />
+      <PluginContext.Provider value={hostPluginId}>
+        <PluginNewThreadComposer
+          draftKey={draftKey}
+          defaultProjectId={seed.projectId}
+          defaultProviderId={seed.providerId}
+          defaultModel={seed.model}
+          defaultReasoningLevel={seed.reasoningLevel}
+          defaultServiceTier={seed.serviceTier}
+          defaultPermissionMode={seed.permissionMode}
+          defaultEnvironment={seed.environment}
+          initialPrompt="review every PR for slop"
+          onSubmit={onSubmit}
+        />
+      </PluginContext.Provider>
     </MemoryRouter>
   );
 }
@@ -558,8 +562,9 @@ function renderComposer(
   seed: NewThreadRequest,
   onSubmit: (request: NewThreadRequest) => void,
   draftKey: string,
+  hostPluginId: string | null = null,
 ) {
-  return render(composerElement(seed, onSubmit, draftKey));
+  return render(composerElement(seed, onSubmit, draftKey, hostPluginId));
 }
 
 const BRANCH_INPUTS_SCHEMA = {
@@ -2288,6 +2293,119 @@ describe("PluginNewThreadComposer seeding", () => {
 
     await waitFor(() => expect(draft.getCurrent().text).toBe("newer text"));
     expect(getAllPluginDraftMetadata(draft.storageKey)).toEqual({});
+  });
+
+  it("submits only the host plugin's metadata and keeps other namespaces in the draft", async () => {
+    let finishSubmit: (() => void) | null = null;
+    const onSubmit = vi.fn(
+      (_request: NewThreadRequest) =>
+        new Promise<void>((resolve) => {
+          finishSubmit = resolve;
+        }),
+    );
+    renderComposer(STORED_REQUEST, onSubmit, "host-only-success", "alpha");
+    await waitFor(() => {
+      expect(latestPromptBoxProps().disabled).toBe(false);
+    });
+    const draftKey = getPromptDraftAccessor({
+      kind: "plugin-new-thread",
+      key: "host-only-success",
+    }).storageKey;
+
+    act(() => {
+      setPluginDraftMetadata(draftKey, "alpha", { owner: "alpha" });
+      setPluginDraftMetadata(draftKey, "beta", { owner: "beta" });
+      pressSubmit();
+    });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const request = onSubmit.mock.calls[0]?.[0];
+    expect(request?.pluginMetadata).toEqual({ owner: "alpha" });
+    expect(request).not.toHaveProperty("experimental_pluginMetadataByPlugin");
+    expect(getPluginDraftMetadata(draftKey, "alpha")).toEqual({});
+    expect(getPluginDraftMetadata(draftKey, "beta")).toEqual({
+      owner: "beta",
+    });
+
+    await act(async () => {
+      finishSubmit?.();
+    });
+    expect(getPluginDraftMetadata(draftKey, "beta")).toEqual({
+      owner: "beta",
+    });
+  });
+
+  it("omits pluginMetadata when the host plugin set none", async () => {
+    const onSubmit = vi.fn((_request: NewThreadRequest) => {});
+    renderComposer(STORED_REQUEST, onSubmit, "host-without-metadata", "alpha");
+    await waitFor(() => {
+      expect(latestPromptBoxProps().disabled).toBe(false);
+    });
+    const draftKey = getPromptDraftAccessor({
+      kind: "plugin-new-thread",
+      key: "host-without-metadata",
+    }).storageKey;
+
+    act(() => {
+      setPluginDraftMetadata(draftKey, "beta", { owner: "beta" });
+    });
+    await submit();
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const request = onSubmit.mock.calls[0]?.[0];
+    expect(request).not.toHaveProperty("pluginMetadata");
+    expect(request).not.toHaveProperty("experimental_pluginMetadataByPlugin");
+    expect(getPluginDraftMetadata(draftKey, "beta")).toEqual({
+      owner: "beta",
+    });
+  });
+
+  it("restores the host plugin's metadata after a failed submission without overwriting newer edits", async () => {
+    let failSubmit: (() => void) | null = null;
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failSubmit = () => reject(new Error("create failed"));
+        }),
+    );
+    renderComposer(STORED_REQUEST, onSubmit, "host-only-failure", "alpha");
+    await waitFor(() => {
+      expect(latestPromptBoxProps().disabled).toBe(false);
+    });
+    const draftKey = getPromptDraftAccessor({
+      kind: "plugin-new-thread",
+      key: "host-only-failure",
+    }).storageKey;
+
+    act(() => {
+      setPluginDraftMetadata(draftKey, "alpha", { original: true });
+      setPluginDraftMetadata(draftKey, "beta", { other: true });
+      pressSubmit();
+    });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(getPluginDraftMetadata(draftKey, "alpha")).toEqual({});
+    await act(async () => {
+      failSubmit?.();
+    });
+    await waitFor(() =>
+      expect(getPluginDraftMetadata(draftKey, "alpha")).toEqual({
+        original: true,
+      }),
+    );
+    expect(getPluginDraftMetadata(draftKey, "beta")).toEqual({ other: true });
+
+    act(() => {
+      pressSubmit();
+    });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    act(() => {
+      setPluginDraftMetadata(draftKey, "alpha", { newer: true });
+    });
+    await act(async () => {
+      failSubmit?.();
+    });
+    expect(getPluginDraftMetadata(draftKey, "alpha")).toEqual({
+      newer: true,
+    });
+    expect(getPluginDraftMetadata(draftKey, "beta")).toEqual({ other: true });
   });
 
   it("ignores a repeated submit while the first submission is pending", async () => {

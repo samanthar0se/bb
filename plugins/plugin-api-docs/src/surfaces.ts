@@ -661,7 +661,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
           "Lock the prompt box while the plugin works, then release it",
           "Write into any prompt box on screen from a panel or page",
           "Read selection.providerId for the effective provider selected in that composer; it updates when the selection changes and is absent while unresolved",
-          "Read the calling plugin's saved metadata for the new-thread draft and set or clear only that plugin's metadata; unsupported composers return null and omit the setter",
+          "Read the calling plugin's saved metadata for the new-thread draft and set or clear only that plugin's metadata; unsupported composers return null and omit the setter, and a plugin's embedded new-thread composer submits only that plugin's metadata as pluginMetadata",
         ],
         apiSymbols: [
           "useComposer",

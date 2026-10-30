@@ -289,6 +289,7 @@ export interface NewThreadComposerProps {
   projectId: string | null;
   onProjectChange: (projectId: string) => void | Promise<void>;
   draftStorage: PromptDraftScope;
+  hostPluginId?: string;
   selectionScope: NewThreadComposerSelectionScope;
   seed?: NewThreadComposerSeed;
   resetKey?: string | number | null;
@@ -516,6 +517,7 @@ export function NewThreadComposer({
   projectId: requestedProjectId,
   onProjectChange,
   draftStorage,
+  hostPluginId,
   selectionScope,
   seed,
   resetKey,
@@ -1662,6 +1664,7 @@ export function NewThreadComposer({
       const submittedDraft = promptDraft.getCurrent();
       const submittedMetadata = getAllPluginDraftMetadata(
         promptDraft.storageKey,
+        hostPluginId,
       );
       const input = promptDraftToInput(submittedDraft);
       if (
@@ -1716,6 +1719,7 @@ export function NewThreadComposer({
       const clearedSubmittedMetadata = clearPluginDraftMetadataIfCurrentMatches(
         promptDraft.storageKey,
         submittedMetadata,
+        hostPluginId,
       );
       let submittedDraftChanged = false;
       const unsubscribeDraft = promptDraft.subscribe(() => {
@@ -1748,13 +1752,15 @@ export function NewThreadComposer({
           clearedSubmittedDraft &&
           clearedSubmittedMetadata &&
           isPromptDraftEmpty(promptDraft.getCurrent()) &&
-          Object.keys(getAllPluginDraftMetadata(promptDraft.storageKey))
-            .length === 0
+          Object.keys(
+            getAllPluginDraftMetadata(promptDraft.storageKey, hostPluginId),
+          ).length === 0
         ) {
           if (Object.keys(submittedMetadata).length > 0) {
             restorePluginDraftMetadataIfEmpty(
               promptDraft.storageKey,
               submittedMetadata,
+              hostPluginId,
             );
           }
           promptDraft.restoreIfEmpty(submittedDraft);
@@ -1770,6 +1776,7 @@ export function NewThreadComposer({
     [
       clearReuseEnvironment,
       executionInputSources,
+      hostPluginId,
       onSubmit,
       permissionMode,
       projectDefaultsUnavailable,
