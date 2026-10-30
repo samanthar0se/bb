@@ -1843,13 +1843,14 @@ Before stabilization, audit:
 
 ## `PluginProviderOptionsContext.experimental_pluginMetadata`
 
-**Kept experimental (2026-08-22).** This context field exposes the owning
+**Kept experimental.** This context field exposes the owning
 plugin's per-thread metadata to its provider options hook. The snapshot is
 untrusted, user-writable, nonsecret JSON, read synchronously at every dispatch,
-deep-frozen, and `{}` when absent or corrupt; it is never automatically copied
-to provider options, the daemon wire, prompts, or logs. Audit whether this
-boundary and its size/validation semantics remain appropriate before removing
-the prefix.
+deep-frozen, and `{}` when absent or corrupt. The provider hook chooses which
+values to use when deriving options. A runtime test verifies that the raw
+snapshot is absent from serialized command output. Audit whether this boundary
+and its size/validation semantics remain appropriate before removing the
+prefix.
 
 ## `bb.providers.register` (`experimental_bridgeOptions`, `experimental_visibility`, and the `experimental_providerBridge` artifact export)
 

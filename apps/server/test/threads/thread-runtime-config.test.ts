@@ -1001,6 +1001,14 @@ describe("thread runtime config", () => {
             },
             composerActions: ["plan"],
             deriveProviderOptions: (context) => ({
+              seen: {
+                threadId: context.threadId,
+                projectId: context.projectId,
+                model: context.model,
+                permissionMode: context.permissionMode,
+                promptMode: context.promptMode ?? null,
+              },
+              verbose: context.settings.verbose === true,
               derived:
                 typeof context.experimental_pluginMetadata.value === "string"
                   ? context.experimental_pluginMetadata.value
@@ -1052,6 +1060,11 @@ describe("thread runtime config", () => {
         pluginId: "provider-hooked-a",
         metadata: { value: "a-one", nested: {}, items: [], raw: "raw-marker" },
       });
+      insertThreadPluginMetadata(harness.db, {
+        threadId: thread.id,
+        pluginId: "provider-hooked-b",
+        metadata: { value: "b-one", nested: {}, items: [] },
+      });
       const dispatch = (providerId: "hooked-a" | "hooked-b") =>
         buildThreadStartCommand(harness.deps, {
           environment,
@@ -1073,6 +1086,14 @@ describe("thread runtime config", () => {
         });
       const first = await dispatch("hooked-a");
       expect(first.options.providerOptions).toEqual({
+        seen: {
+          threadId: thread.id,
+          projectId: project.id,
+          model: "hook-model",
+          permissionMode: "auto",
+          promptMode: null,
+        },
+        verbose: true,
         derived: "a-one",
         nestedFrozen: true,
         arrayFrozen: true,
@@ -1090,11 +1111,13 @@ describe("thread runtime config", () => {
         derived: "a-two",
       });
       const switched = await dispatch("hooked-b");
-      expect(switched.options.providerOptions).toMatchObject({ derived: null });
+      expect(switched.options.providerOptions).toMatchObject({
+        derived: "b-one",
+      });
       const corrupt = harness.db.$client.prepare(
-        "INSERT INTO thread_plugin_metadata (thread_id, plugin_id, metadata_json) VALUES (?, ?, ?)",
+        "UPDATE thread_plugin_metadata SET metadata_json = ? WHERE thread_id = ? AND plugin_id = ?",
       );
-      corrupt.run(thread.id, "provider-hooked-b", "not-json");
+      corrupt.run("not-json", thread.id, "provider-hooked-b");
       const corruptCommand = await dispatch("hooked-b");
       expect(corruptCommand.options.providerOptions).toMatchObject({
         derived: null,
