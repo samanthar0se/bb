@@ -247,6 +247,7 @@ export function useThreadCreationOptions(
     scope = "new-thread",
     sessionOptionSelections: sessionOptionSelectionsOverride,
   } = options ?? {};
+  const systemConfig = useSystemConfig();
   const { setValue: setStoredProviderId, value: storedProviderId } =
     usePromptBoxProviderPreference();
   const setStoredProviderModelReasoning =
@@ -256,7 +257,10 @@ export function useThreadCreationOptions(
   const {
     setValue: setStoredEnvironmentSelectionValue,
     value: storedEnvironmentSelectionValue,
-  } = usePromptBoxEnvironmentPreference(preferenceProjectId);
+  } = usePromptBoxEnvironmentPreference(
+    preferenceProjectId,
+    systemConfig.data?.generalSettings?.createWorktreesByDefault ?? true,
+  );
   const [rootComposeReuseValue, setRootComposeReuseValue] =
     useRootComposeReuseEnvironment();
   const [threadSelections, setThreadSelections] =
@@ -433,7 +437,6 @@ export function useThreadCreationOptions(
     projectId: executionOptionsProjectId,
   });
   const hostsQuery = useHosts();
-  const systemConfig = useSystemConfig();
   const providers = executionOptionsQuery.data?.providers ?? EMPTY_PROVIDERS;
   const isLoadingModels =
     executionOptionsQueryEnabled &&

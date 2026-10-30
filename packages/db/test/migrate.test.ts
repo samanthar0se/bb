@@ -1807,6 +1807,7 @@ describe("migrate", () => {
         allowFastServiceTier: true,
         telemetryEnabled: true,
         managedBranchPrefix: "bb/",
+        createWorktreesByDefault: true,
         idleProviderSessionTimeoutMinutes: 30,
         onboardingCompletedAt: "2026-08-01T00:00:00.000Z",
         earlyAdopter: false,

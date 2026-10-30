@@ -196,10 +196,14 @@ function GeneralSettingsStory({
 }) {
   const state = useSettingsStoryState();
   const [terminalCopyOnSelect, setTerminalCopyOnSelect] = useState(true);
+  const [createWorktreesByDefault, setCreateWorktreesByDefault] =
+    useState(true);
 
   return (
     <>
       <GeneralSettingsSection
+        createWorktreesByDefault={createWorktreesByDefault}
+        onCreateWorktreesByDefaultChange={setCreateWorktreesByDefault}
         confirmThreadArchive={state.confirmThreadArchive}
         onConfirmThreadArchiveChange={state.setConfirmThreadArchive}
         keepHistoryAfterContextClear={state.keepHistoryAfterContextClear}

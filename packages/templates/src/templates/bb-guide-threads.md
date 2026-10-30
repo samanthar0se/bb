@@ -116,7 +116,7 @@ Spawning:
   starts from the last fetched copy and provisioning reports it; an explicit
   origin/<branch> fails instead. refs/remotes/origin/<branch> uses the last
   fetched copy without fetching.
-  With no environment flag, a new thread gets a fresh worktree of the
+  With no environment flag and `createWorktreesByDefault` enabled, a new thread gets a fresh worktree of the
   project's default branch (the project checkout when the project has no
   branch) on the primary host, or on the persistent machine that holds the
   project's source when the primary host has none. A child of a live thread
@@ -205,3 +205,7 @@ Lifecycle ownership:
   forks keep their own policies.
 
 `bb thread spawn --plugin-metadata-by-plugin '{"linear":{"issue":"BB-42"}}'` seeds per-plugin JSON objects while keeping CLI attribution. The aggregate is limited to 256 KiB, and fork options reject the map. SDK callers use `threads.create({ experimental_pluginMetadataByPlugin: ... })`; plugin callers use their existing single-plugin `pluginMetadata` seed.
+
+Set `bb settings general createWorktreesByDefault false` to default to the
+existing project checkout; same-project children share their ready parent's
+workspace. Explicit worktree or environment selections retain their meaning.

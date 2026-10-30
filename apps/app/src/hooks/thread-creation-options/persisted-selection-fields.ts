@@ -327,11 +327,16 @@ export function usePromptBoxPermissionModePreference(): PersistedPermissionModeS
 
 export function usePromptBoxEnvironmentPreference(
   projectId?: string | null,
+  createWorktreesByDefault = true,
 ): PersistedStringSelectionField {
   const normalizedProjectId = projectId?.trim();
   const atom =
     normalizedProjectId && normalizedProjectId.length > 0
-      ? projectEnvironmentSelectionAtomFamily(normalizedProjectId)
+      ? projectEnvironmentSelectionAtomFamily(
+          createWorktreesByDefault
+            ? normalizedProjectId
+            : `${normalizedProjectId}-checkout-default`,
+        )
       : environmentSelectionAtom;
   const [value, setAtomValue] = useAtom(atom);
   const setValue = useCallback(

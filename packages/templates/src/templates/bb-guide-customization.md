@@ -460,3 +460,15 @@ include `localhost,127.0.0.1,::1` in `NO_PROXY`. `NODE_EXTRA_CA_CERTS` adds a PE
 bundle. `NODE_USE_SYSTEM_CA=0` and `NODE_USE_ENV_PROXY=0` opt out of the defaults.
 Restart bb after changes. Proxy support requires Node 22.21+, 24.5+, or 26;
 custom socket/agent libraries, including daemon WebSockets, can still bypass it.
+
+### Default thread workspace
+
+`bb settings general createWorktreesByDefault false` (Settings → General → Git →
+Create worktrees for new threads) uses the existing project checkout for implicit
+new-thread placement. Same-project children share their ready parent workspace.
+The default is `true`, preserving isolated worktrees. Explicit environment
+choices, including `--new-environment worktree`, override this preference; a
+newly selected worktree choice in the composer is also explicit. Turning this
+off starts a fresh composer environment preference for each project, so older
+worktree memories do not override it. Personal workspaces
+are unchanged. The SDK uses `system.updateGeneralSettings` with the same field.

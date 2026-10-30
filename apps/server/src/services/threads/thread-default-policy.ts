@@ -6,7 +6,11 @@ import type {
   ReasoningLevel,
   Thread,
 } from "@bb/domain";
-import { getEnvironment, getProjectSourceOnPersistentHost } from "@bb/db";
+import {
+  getAppSettings,
+  getEnvironment,
+  getProjectSourceOnPersistentHost,
+} from "@bb/db";
 import { DEFAULT_ENVIRONMENT_PROVIDER_ID } from "../environments/environment-provider-ids.js";
 import { DEFAULT_SERVICE_TIER, PERSONAL_PROJECT_ID } from "@bb/domain";
 import type {
@@ -305,6 +309,16 @@ export async function resolveProjectDefaultThreadEnvironment(
     hostId,
     projectId: args.projectId,
   });
+  if (!getAppSettings(deps.db).createWorktreesByDefault) {
+    return {
+      type: "provider",
+      environmentProviderId: requireDefaultEnvironmentProvider(
+        DEFAULT_ENVIRONMENT_PROVIDER_ID.projectCheckout,
+      ),
+      machine: { type: "existing", hostId },
+      inputs: checkoutProviderInputs(source.path, undefined),
+    };
+  }
   const checkout = await callHostRetryableOnlineRpc(deps, {
     hostId,
     timeoutMs: COMMAND_TIMEOUT_MS,
@@ -408,6 +422,14 @@ export async function resolveCreateThreadEnvironment(
     if (parentEnvironment === null) {
       throw new Error("Parent thread environment is missing");
     }
+    if (!getAppSettings(deps.db).createWorktreesByDefault) {
+      if (parentEnvironment.status !== "ready") {
+        return resolveProjectDefaultThreadEnvironment(deps, {
+          projectId: args.projectId,
+        });
+      }
+      return { type: "reuse", environmentId: parentEnvironment.id };
+    }
     return {
       type: "provider",
       environmentProviderId: requireDefaultEnvironmentProvider(
@@ -441,7 +463,11 @@ export async function resolveCreateThreadEnvironment(
     };
   }
 
-  if (hasLiveParent && isImplicitHostDefaultEnvironment(environment)) {
+  if (
+    hasLiveParent &&
+    isImplicitHostDefaultEnvironment(environment) &&
+    getAppSettings(deps.db).createWorktreesByDefault
+  ) {
     return {
       type: "provider",
       environmentProviderId: requireDefaultEnvironmentProvider(
@@ -456,6 +482,7 @@ export async function resolveCreateThreadEnvironment(
   }
   if (
     hasLiveParent &&
+    getAppSettings(deps.db).createWorktreesByDefault &&
     environment.type === "provider" &&
     environment.environmentProviderId ===
       DEFAULT_ENVIRONMENT_PROVIDER_ID.projectCheckout &&

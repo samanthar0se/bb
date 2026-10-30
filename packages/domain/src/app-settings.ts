@@ -40,6 +40,7 @@ export const appSettingsSchema = z
     allowFastServiceTier: z.boolean(),
     telemetryEnabled: z.boolean(),
     managedBranchPrefix: managedBranchPrefixSchema,
+    createWorktreesByDefault: z.boolean(),
     idleProviderSessionTimeoutMinutes: idleProviderSessionTimeoutMinutesSchema,
     machineServerUrl: z
       .string()
@@ -76,6 +77,7 @@ export const defaultAppSettings: AppSettings = {
   allowFastServiceTier: true,
   telemetryEnabled: true,
   managedBranchPrefix: DEFAULT_MANAGED_BRANCH_PREFIX,
+  createWorktreesByDefault: true,
   idleProviderSessionTimeoutMinutes: 30,
   machineServerUrl: null,
   defaultMachineAccess: null,
@@ -88,6 +90,7 @@ export const disabledProviderIdsSchema = z.array(z.string().min(1));
 
 export const appSettingsUpdateSchema = z.union([
   appSettingsSchema.extend({
+    createWorktreesByDefault: z.boolean().optional(),
     idleProviderSessionTimeoutMinutes:
       idleProviderSessionTimeoutMinutesSchema.optional(),
     terminalCopyOnSelect: z.boolean().optional(),
@@ -101,6 +104,7 @@ export const appSettingsUpdateSchema = z.union([
     earlyAdopter: z.boolean().optional(),
   }),
   appSettingsSchema.omit({ showDiagnosticEvents: true }).extend({
+    createWorktreesByDefault: z.boolean().optional(),
     idleProviderSessionTimeoutMinutes:
       idleProviderSessionTimeoutMinutesSchema.optional(),
     terminalCopyOnSelect: z.boolean().optional(),

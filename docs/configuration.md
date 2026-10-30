@@ -1480,3 +1480,15 @@ update message. Web browsers control their own handoff and may show a second
 prompt; BB cannot reliably detect missing apps in a browser. Executable web
 schemes, local-file launch schemes, and reserved editor-action schemes remain
 blocked.
+
+### Default thread workspace
+
+`bb settings general createWorktreesByDefault false` (Settings → General → Git →
+Create worktrees for new threads) uses the existing project checkout for implicit
+new-thread placement. Same-project children share their ready parent workspace.
+The default is `true`, preserving isolated worktrees. Explicit environment
+choices, including `--new-environment worktree`, override this preference; a
+newly selected worktree choice in the composer is also explicit. Turning this
+off starts a fresh composer environment preference for each project, so older
+worktree memories do not override it. Personal workspaces
+are unchanged. The SDK uses `system.updateGeneralSettings` with the same field.

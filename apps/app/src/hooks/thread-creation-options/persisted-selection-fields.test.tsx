@@ -197,3 +197,29 @@ describe("tab-local composer selections", () => {
     expect(result.current.machine.value).toBe("host-b");
   });
 });
+
+describe("checkout default preferences", () => {
+  it("resets older worktree memories while preserving subsequent explicit choices", () => {
+    window.localStorage.setItem(
+      "bb.promptbox.environment-project-default-reset-1",
+      "provider:git-worktree",
+    );
+    const store = createStore();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <Provider store={store}>{children}</Provider>
+    );
+    const { result, rerender } = renderHook(
+      ({ worktrees }) =>
+        usePromptBoxEnvironmentPreference("project-default-reset", worktrees),
+      { wrapper, initialProps: { worktrees: true } },
+    );
+    expect(result.current.value).toBe("provider:git-worktree");
+    rerender({ worktrees: false });
+    expect(result.current.value).toBe("");
+    act(() => result.current.setValue("provider:git-worktree"));
+    expect(result.current.value).toBe("provider:git-worktree");
+    rerender({ worktrees: true });
+    rerender({ worktrees: false });
+    expect(result.current.value).toBe("provider:git-worktree");
+  });
+});

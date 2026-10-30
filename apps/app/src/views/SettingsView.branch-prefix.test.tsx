@@ -12,6 +12,8 @@ import { GeneralSettingsSection } from "./SettingsView";
 afterEach(cleanup);
 
 function renderSection(overrides?: {
+  createWorktreesByDefault?: boolean;
+  onCreateWorktreesByDefaultChange?: (enabled: boolean) => void;
   terminalCopyOnSelect?: boolean;
   onTerminalCopyOnSelectChange?: (enabled: boolean) => void;
   generalSettingsDisabled?: boolean;
@@ -20,6 +22,10 @@ function renderSection(overrides?: {
 }) {
   return render(
     <GeneralSettingsSection
+      createWorktreesByDefault={overrides?.createWorktreesByDefault ?? true}
+      onCreateWorktreesByDefaultChange={
+        overrides?.onCreateWorktreesByDefaultChange ?? vi.fn()
+      }
       confirmThreadArchive={true}
       onConfirmThreadArchiveChange={vi.fn()}
       keepHistoryAfterContextClear={false}
@@ -134,5 +140,16 @@ describe("new branch prefix setting", () => {
     fireEvent.keyDown(input, { key: "Escape" });
     expect(input.value).toBe("bb/");
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("thread workspace preference", () => {
+  it("allows using existing checkouts for new threads", () => {
+    const onChange = vi.fn();
+    renderSection({ onCreateWorktreesByDefaultChange: onChange });
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Create worktrees for new threads" }),
+    );
+    expect(onChange).toHaveBeenCalledWith(false);
   });
 });

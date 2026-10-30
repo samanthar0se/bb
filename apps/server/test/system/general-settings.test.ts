@@ -8,6 +8,28 @@ import { seedHostSession, seedPrimaryHost } from "../helpers/seed.js";
 import { createMockHubSocket } from "../helpers/mock-hub-socket.js";
 
 describe("general settings", () => {
+  it("persists workspace defaults and preserves them for older clients", async () => {
+    await withTestHarness(async (harness) => {
+      const put = (settings: unknown) =>
+        harness.app.request("/api/v1/settings/general", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(settings),
+        });
+      expect(
+        (await put({ ...defaultAppSettings, createWorktreesByDefault: false }))
+          .status,
+      ).toBe(200);
+      const { createWorktreesByDefault, ...legacy } = defaultAppSettings;
+      expect(createWorktreesByDefault).toBe(true);
+      expect((await put(legacy)).status).toBe(200);
+      expect(getAppSettings(harness.db).createWorktreesByDefault).toBe(false);
+      expect(
+        (await put({ ...defaultAppSettings, createWorktreesByDefault: "no" }))
+          .status,
+      ).toBe(400);
+    });
+  });
   it("persists idle timeout changes, pushes them to daemons and preserves them for older clients", async () => {
     await withTestHarness(async (harness) => {
       const { host, session } = seedHostSession(harness.deps);
@@ -283,10 +305,7 @@ it("preserves telemetry opt-out when older clients update other settings", async
   });
 });
 
-it.each([
-  "confirmThreadArchive",
-  "summarizeShellCommands",
-] as const)(
+it.each(["confirmThreadArchive", "summarizeShellCommands"] as const)(
   "persists %s opt-out and preserves it for older clients",
   async (key) => {
     await withTestHarness(async (harness) => {

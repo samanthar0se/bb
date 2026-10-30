@@ -8,7 +8,7 @@ import {
   type Thread,
   type GitSourceInspection,
 } from "@bb/domain";
-import { createEnvironment } from "@bb/db";
+import { createEnvironment, getAppSettings, setAppSettings } from "@bb/db";
 import { describe, expect, it } from "vitest";
 import {
   resolveCreateThreadEnvironment,
@@ -908,5 +908,80 @@ describe("resolveThreadExecutionPermissionMode", () => {
         thread: makeThread(),
       }),
     ).toBe("accept-edits");
+  });
+});
+
+describe("existing checkout default", () => {
+  it("uses the source checkout without inspecting or switching its Git branch", async () => {
+    await withTestHarness(async (harness) => {
+      setAppSettings(harness.db, {
+        ...getAppSettings(harness.db),
+        createWorktreesByDefault: false,
+      });
+      const { host } = seedHostSession(harness.deps);
+      seedPrimaryHost(harness.deps, host.id);
+      const { project } = seedProjectWithSource(harness.deps, {
+        hostId: host.id,
+        path: "/tmp/dirty-feature-checkout",
+      });
+      await expect(
+        resolveProjectDefaultThreadEnvironment(harness.deps, {
+          projectId: project.id,
+        }),
+      ).resolves.toEqual({
+        type: "provider",
+        environmentProviderId: "project-checkout",
+        machine: { type: "existing", hostId: host.id },
+        inputs: { path: "/tmp/dirty-feature-checkout" },
+      });
+    });
+  });
+
+  it("reuses a ready same-project parent while honoring explicit worktrees", async () => {
+    await withTestHarness(async (harness) => {
+      installFakeGitWorktreeProvider();
+      setAppSettings(harness.db, {
+        ...getAppSettings(harness.db),
+        createWorktreesByDefault: false,
+      });
+      const { host } = seedHostSession(harness.deps);
+      const { project } = seedProjectWithSource(harness.deps, {
+        hostId: host.id,
+        path: "/tmp/source",
+      });
+      const environment = createEnvironment(harness.db, harness.hub, {
+        projectId: project.id,
+        hostId: host.id,
+        path: "/tmp/existing-parent",
+        isGitRepo: true,
+        providerOwnsPath: true,
+        status: "ready",
+        environmentProvider: null,
+      });
+      const parentThread = makeParentThread({
+        projectId: project.id,
+        environmentId: environment.id,
+      });
+      await expect(
+        resolveCreateThreadEnvironment(harness.deps, {
+          projectId: project.id,
+          parentThread,
+          requestedEnvironment: { type: "project-default" },
+        }),
+      ).resolves.toEqual({ type: "reuse", environmentId: environment.id });
+      const explicit = {
+        type: "provider" as const,
+        environmentProviderId: "git-worktree",
+        machine: { type: "existing" as const, hostId: host.id },
+        inputs: { branch: { kind: "default" } },
+      };
+      await expect(
+        resolveCreateThreadEnvironment(harness.deps, {
+          projectId: project.id,
+          parentThread,
+          requestedEnvironment: explicit,
+        }),
+      ).resolves.toEqual(explicit);
+    });
   });
 });

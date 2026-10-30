@@ -307,6 +307,8 @@ export function registerSystemRoutes(
         : undefined;
     const updatedSettings = appSettingsSchema.parse({
       ...settings,
+      createWorktreesByDefault:
+        settings.createWorktreesByDefault ?? current.createWorktreesByDefault,
       idleProviderSessionTimeoutMinutes:
         settings.idleProviderSessionTimeoutMinutes === undefined
           ? current.idleProviderSessionTimeoutMinutes

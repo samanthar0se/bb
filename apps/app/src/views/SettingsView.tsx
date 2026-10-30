@@ -170,6 +170,8 @@ interface AppearanceSettingsSectionProps {
 }
 
 interface GeneralSettingsSectionProps {
+  createWorktreesByDefault: boolean;
+  onCreateWorktreesByDefaultChange: (enabled: boolean) => void;
   confirmThreadArchive: boolean;
   onConfirmThreadArchiveChange: (enabled: boolean) => void;
   keepHistoryAfterContextClear: boolean;
@@ -859,6 +861,8 @@ export function AppearanceSettingsSection({
 }
 
 export function GeneralSettingsSection({
+  createWorktreesByDefault,
+  onCreateWorktreesByDefaultChange,
   confirmThreadArchive,
   onConfirmThreadArchiveChange,
   keepHistoryAfterContextClear,
@@ -1052,6 +1056,17 @@ export function GeneralSettingsSection({
       </SettingsSection>
       <SettingsSection title="Git">
         <div className="space-y-5">
+          <SettingsWithControl
+            label="Create worktrees for new threads"
+            description="Use an isolated Git worktree by default. Turn off to use the project checkout and let child threads share their parent's workspace. Explicit worktree selections still apply."
+          >
+            <Switch
+              checked={createWorktreesByDefault}
+              disabled={generalSettingsDisabled}
+              onCheckedChange={onCreateWorktreesByDefaultChange}
+              aria-label="Create worktrees for new threads"
+            />
+          </SettingsWithControl>
           <ManagedBranchPrefixSetting
             value={managedBranchPrefix}
             disabled={generalSettingsDisabled}
@@ -1462,6 +1477,12 @@ export function SettingsView() {
           }
           desktopBrowserAvailable={desktopBrowserAvailable}
           generalSettingsDisabled={systemConfigQuery.data === undefined}
+          createWorktreesByDefault={generalSettings.createWorktreesByDefault}
+          onCreateWorktreesByDefaultChange={(enabled) =>
+            updateGeneralSettingsMutation.mutate({
+              createWorktreesByDefault: enabled,
+            })
+          }
           managedBranchPrefix={generalSettings.managedBranchPrefix}
           onManagedBranchPrefixChange={async (prefix) => {
             await updateGeneralSettingsMutation.mutateAsync({
