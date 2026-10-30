@@ -2831,8 +2831,13 @@ export interface NewThreadRequest {
   executionInputSources: CreateExecutionInputSources;
   environment: CreateThreadEnvironmentArgs;
   input: PromptInput[];
-  /** Per-plugin draft metadata carried into a user-created thread. */
-  experimental_pluginMetadataByPlugin?: Record<string, JsonObject>;
+  /**
+   * The host plugin's own new-thread draft metadata, present only when the
+   * plugin set a nonempty namespace through `experimental_setPluginMetadata`.
+   * Other plugins' namespaces stay in the draft and are never delivered here.
+   * Forward it to `threads.spawn` unchanged to seed the thread's metadata.
+   */
+  pluginMetadata?: JsonObject;
   /**
    * Epoch ms the first turn should dispatch at. Present only when the
    * submission came from `useComposer().experimental_submit` — a scheduled

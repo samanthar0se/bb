@@ -6,6 +6,7 @@ import type {
 import { cn } from "@bb/shared-ui/lib/utils";
 import {
   NewThreadComposer,
+  type NewThreadComposerSubmission,
   type NewThreadComposerSeed,
 } from "@/components/promptbox/NewThreadComposer";
 import { PluginContext } from "@/components/plugin/plugin-context";
@@ -47,14 +48,22 @@ export function PluginNewThreadComposer({
     initialPrompt,
   };
   const composerKey = draftKey ?? pluginId ?? "default";
-  const handleSubmit = async (request: NewThreadRequest) => {
-    await onSubmit({
+  const handleSubmit = async ({
+    experimental_pluginMetadataByPlugin,
+    ...request
+  }: NewThreadComposerSubmission) => {
+    const hostMetadata = pluginId
+      ? experimental_pluginMetadataByPlugin?.[pluginId]
+      : undefined;
+    const pluginRequest: NewThreadRequest = {
       ...request,
+      ...(hostMetadata === undefined ? {} : { pluginMetadata: hostMetadata }),
       executionInputSources: {
         ...request.executionInputSources,
         providerId: "explicit",
       },
-    });
+    };
+    await onSubmit(pluginRequest);
   };
 
   return (
@@ -62,6 +71,7 @@ export function PluginNewThreadComposer({
       projectId={pickedProjectId}
       onProjectChange={setPickedProjectId}
       draftStorage={{ kind: "plugin-new-thread", key: composerKey }}
+      hostPluginId={pluginId ?? undefined}
       selectionScope="component-local"
       seed={seed}
       resetKey={defaultProjectId ?? null}

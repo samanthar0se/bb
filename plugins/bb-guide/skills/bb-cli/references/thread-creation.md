@@ -30,6 +30,10 @@
 - Omit `--base-branch` for bb's default. Explicit values are exact; use
   `origin/<branch>` for a remote ref. It applies to `--new-environment
 worktree` only; a provider takes its branch through `--environment-inputs`.
+- Seed per-plugin JSON metadata atomically on a new thread with
+  `--plugin-metadata-by-plugin <json>` (a plugin-keyed object, not `null`);
+  forks and `--origin-kind`/`--source-thread` cannot use it. For example:
+  `bb thread spawn --project proj-1 --prompt "Track issue" --plugin-metadata-by-plugin '{"linear":{"issue":"BB-42"}}'`.
 - Spawn also accepts `--title`, `--origin-kind`, `--source-thread`,
   `--source-seq-end`, `--agent-context-seed`, and `--json`.
 - Add repeatable `--file <path>` / `--image <path>` flags for structured prompt

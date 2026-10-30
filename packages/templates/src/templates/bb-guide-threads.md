@@ -50,6 +50,8 @@ Spawning:
     --plan                         Send the prompt as the provider's /plan action (plan first, execute after approval)
     --section <id>                 Create the thread in a section
     --visibility <visibility>      visible or hidden; a child inherits its parent by default
+    --plugin-metadata-by-plugin <json>  Per-plugin JSON object seeded atomically on a new thread;
+                                   not available for forks or with --origin-kind/--source-thread
     --send-at <when>               Dispatch the first message at an ISO 8601 timestamp or a duration from now (30s, 10m, 2h, 7d)
     --draft                        Save the prompt as the thread's draft instead of sending it
     --file <path>                  CLI-local absolute path, file: URL, or uploaded file path
@@ -57,6 +59,8 @@ Spawning:
     --origin-kind <kind>           Create a fork thread
     --source-thread <id>           Source thread for a fork
     --source-seq-end <seq>         Fork after the source turn containing this event sequence
+
+  Example: bb thread spawn --project proj-1 --prompt "Track issue" --plugin-metadata-by-plugin '{"linear":{"issue":"BB-42"}}'
 
   Execution defaults resolve from explicit flags, live parent execution, and
   remembered project defaults. With no remembered model, bb uses the explicitly
