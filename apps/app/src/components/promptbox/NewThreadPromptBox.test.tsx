@@ -5,6 +5,7 @@ import { TooltipProvider } from "@bb/shared-ui/tooltip";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Host } from "@bb/domain";
 import { makeHost } from "@bb/test-helpers/domain-fixtures";
+import { testTypeaheadConfig } from "@/test/fixtures/composer-search";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SystemEnvironmentProvider,
@@ -45,25 +46,7 @@ describe("NewThreadPromptBoxUI", () => {
                 entries: [],
                 onSelectEntry: vi.fn(),
               }}
-              typeahead={{
-                mention: {
-                  results: { groups: [], suggestions: [] },
-                  isRefreshing: false,
-                  isLoading: false,
-                  isError: false,
-                  onQueryChange: vi.fn(),
-                },
-                command: {
-                  triggers: [],
-                  suggestions: [],
-                  isLoading: false,
-                  isError: false,
-                  hasMore: false,
-                  isLoadingMore: false,
-                  loadMore: vi.fn(),
-                  onQueryChange: vi.fn(),
-                },
-              }}
+              typeahead={testTypeaheadConfig()}
               attachments={{ items: [] }}
               modeConfig={{
                 environment: {

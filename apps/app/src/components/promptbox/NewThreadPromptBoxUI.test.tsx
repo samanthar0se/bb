@@ -7,7 +7,15 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useComposerView } from "@/lib/plugin-sdk-hooks";
+import { testTypeaheadConfig } from "@/test/fixtures/composer-search";
 import { NewThreadPromptBoxUI } from "./NewThreadPromptBox";
+
+vi.mock("@/components/promptbox/ComposerBox", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/promptbox/ComposerBox")
+  >()),
+  ComposerBox: () => <SelectedProviderProbe />,
+}));
 
 function SelectedProviderProbe() {
   const view = useComposerView();
@@ -31,25 +39,7 @@ const props: ComponentProps<typeof NewThreadPromptBoxUI> = {
     entries: [],
     onSelectEntry: vi.fn(),
   },
-  typeahead: {
-    mention: {
-      results: { groups: [], suggestions: [] },
-      isRefreshing: false,
-      isLoading: false,
-      isError: false,
-      onQueryChange: vi.fn(),
-    },
-    command: {
-      triggers: [],
-      suggestions: [],
-      isLoading: false,
-      isError: false,
-      hasMore: false,
-      isLoadingMore: false,
-      loadMore: vi.fn(),
-      onQueryChange: vi.fn(),
-    },
-  },
+  typeahead: testTypeaheadConfig(),
   attachments: { items: [] },
   modeConfig: {
     environment: {
@@ -60,7 +50,6 @@ const props: ComponentProps<typeof NewThreadPromptBoxUI> = {
     },
     worktree: { options: [], value: null, onChange: vi.fn() },
     permission: { options: [], onChange: vi.fn(), supported: false },
-    header: <SelectedProviderProbe />,
   },
   execution: {
     provider: { selectedId: "codex" },

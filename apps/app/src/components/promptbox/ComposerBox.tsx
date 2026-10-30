@@ -393,6 +393,7 @@ function useComposerRendererHostApi({
   ...input
 }: ComposerBoxProps): {
   api: ExperimentalComposerRendererApi;
+  view: ComposerView;
   boxHost: PluginComposerHost;
   rootHost: ComposerRootHost;
   contributions: ExperimentalComposerContributions;
@@ -627,20 +628,20 @@ function useComposerRendererHostApi({
     Popup: PluginComposerPopup,
     MenuEntry: ComposerMenuEntry,
   };
-  return { api, boxHost, rootHost, contributions, typeahead };
+  return { api, view, boxHost, rootHost, contributions, typeahead };
 }
 
 export function ComposerRendererHostProvider({
   children,
   ...props
 }: ComposerBoxProps & { children: ReactNode }) {
-  const { api, boxHost, rootHost, contributions, typeahead } =
+  const { api, view, boxHost, rootHost, contributions, typeahead } =
     useComposerRendererHostApi(props);
   return (
     <ComposerRendererContext.Provider value={api}>
       <ComposerRootHostContext.Provider value={rootHost}>
         <ComposerContributionsContext.Provider value={contributions}>
-          <PluginComposerViewProvider value={api.view}>
+          <PluginComposerViewProvider value={view}>
             <PluginComposerHostProvider value={boxHost}>
               <ComposerSearchProvider typeahead={typeahead}>
                 {children}
